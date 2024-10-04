@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.12)
 project(NS3Simulation)
 
 # Find NS-3
-find_package(NS3 REQUIRED)
+find_package(ns3 REQUIRED)
 
 # Add your source files
 set(SOURCES
@@ -14,7 +14,7 @@ set(SOURCES
 add_executable(NS3Simulation ${SOURCES})
 
 # Link NS-3 libraries
-target_link_libraries(NS3Simulation PRIVATE NS3::Core NS3::Network NS3::Applications)
+target_link_libraries(NS3Simulation PRIVATE ns3)
 
 # Set NS-3 include directories
 target_include_directories(NS3Simulation PRIVATE ${NS3_INCLUDE_DIRS})
