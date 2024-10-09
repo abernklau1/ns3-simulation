@@ -8,12 +8,35 @@ find_package(ns3 REQUIRED)
 
 # Add your source files
 set(SOURCES
-    main.cpp
+    src/entity.cpp
+
+    src/networking/network_sim.cpp
+
+    src/visualizations/sfml_map_node_visualizer.cpp
+
+    src/utils/geo_utils.cpp
     # Add your other source files here
 )
 
+include_directories(${CMAKE_SOURCE_DIR}/src)
+
+include(FetchContent)
+FetchContent_Declare(SFML
+    GIT_REPOSITORY https://github.com/SFML/SFML.git
+    GIT_TAG 2.6.x
+    GIT_SHALLOW ON
+    EXCLUDE_FROM_ALL
+    SYSTEM)
+FetchContent_MakeAvailable(SFML)
+
+add_library(${PROJECT_NAME} ${SOURCES})
+
 # Create the executable
-add_executable(NS3Simulation ${SOURCES})
+add_executable(NS3SimulationExe main.cpp ${SOURCES})
+
+# Specify the directory where your libraries are located
+set(LIB_DIR "/usr/local/lib")
+
 
 # Windows with MinGW Installations
 if( ${CMAKE_SYSTEM_NAME} MATCHES "Windows" AND MINGW )
@@ -22,21 +45,34 @@ if( ${CMAKE_SYSTEM_NAME} MATCHES "Windows" AND MINGW )
     include_directories("Z:/include")
     # update the lib directory location
     target_link_directories(${PROJECT_NAME} PUBLIC "Z:/lib")
+    target_link_directories(NS3SimulationExe PUBLIC "Z:/lib")
 # OS X Installations
 elseif( APPLE AND ${CMAKE_SYSTEM_NAME} MATCHES "Darwin" )
-		# Specify the directory where your libraries are located
-		set(LIB_DIR "/usr/local/lib")
     # update the include directory location
     include_directories("/usr/local/include")
-
+		
 		file(GLOB MY_LIBS "${LIB_DIR}/libns3*dylib")
     # update the lib directory location
     target_link_directories(${PROJECT_NAME} PUBLIC "/usr/local/lib")
-		target_link_libraries(${PROJECT_NAME} ${MY_LIBS})
+		target_link_libraries(${PROJECT_NAME} PUBLIC ${MY_LIBS} PRIVATE sfml-graphics)
+
+    target_link_directories(NS3SimulationExe PUBLIC "/usr/local/lib")
+    target_link_libraries(NS3SimulationExe PUBLIC ${MY_LIBS} PRIVATE sfml-graphics)
+
 # Blanket *nix Installations
 elseif( UNIX AND ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
     # update the include directory location
     include_directories("/usr/local/include")
+    
+    file(GLOB MY_LIBS "${LIB_DIR}/libns3.42*so")
+
     # update the lib directory location
     target_link_directories(${PROJECT_NAME} PUBLIC "/usr/local/lib")
+    target_link_libraries(${PROJECT_NAME} PUBLIC ${MY_LIBS} PRIVATE sfml-graphics)
+
+    target_link_directories(NS3SimulationExe PUBLIC "/usr/local/lib")
+    target_link_libraries(NS3SimulationExe PUBLIC ${MY_LIBS} PRIVATE sfml-graphics)
 endif()
+
+# Also build tests
+add_subdirectory(tests)
