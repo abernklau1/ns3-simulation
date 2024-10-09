@@ -1,5 +1,6 @@
 #include <SFML/System/Thread.hpp>
 #include <SFML/Window/ContextSettings.hpp>
+#include <SFML/Window/WindowStyle.hpp>
 #include <iostream>
 #include <thread>
 #include <utility>
@@ -29,7 +30,7 @@ void SFMLMapNodeVisualizer::push_edge(Entity a, Entity b, std::string label, dou
 void SFMLMapNodeVisualizer::init() {
     sf::ContextSettings settings(0, 0, 16);
 
-    window.create(sf::VideoMode(1920, 1080), "SFML Map Node Visualizer", sf::Style::HighDPI, settings);
+    window.create(sf::VideoMode(1920, 1080), "SFML Map Node Visualizer", sf::Style::Default, settings);
     window.setVerticalSyncEnabled(true);
 
     window.setActive(false);
