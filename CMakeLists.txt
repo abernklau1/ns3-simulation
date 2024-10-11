@@ -6,10 +6,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Find NS-3
 find_package(ns3 REQUIRED)
 
-# Add your source files
-set(SOURCES
-    main.cpp
-    # Add your other source files here
+# Gather all source files
+file(GLOB SOURCES
+    "*.cpp"
+    "AdhocNetwork/*.cpp"
 )
 
 # Create the executable
@@ -31,7 +31,7 @@ elseif( APPLE AND ${CMAKE_SYSTEM_NAME} MATCHES "Darwin" )
 
 		file(GLOB MY_LIBS "${LIB_DIR}/libns3*dylib")
     # update the lib directory location
-    target_link_directories(${PROJECT_NAME} PUBLIC "/usr/local/lib")
+    target_link_directories(${PROJECT_NAME} PUBLIC "${LIB_DIR}")
 		target_link_libraries(${PROJECT_NAME} ${MY_LIBS})
 # Blanket *nix Installations
 elseif( UNIX AND ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
