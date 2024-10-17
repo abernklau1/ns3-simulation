@@ -12,25 +12,27 @@
 #include "ns3/packet-sink-helper.h"
 #include "ns3/simulator.h"
 #include "ns3/wifi-module.h"
+#include <iostream>
 
 using namespace ns3;
 
 class EtxMatrix
 {
   public:
-    EtxMatrix( uint32_t numNodes, NodeContainer nodes, std::vector<std::vector<Node>> neighbors );
-    ~EtxMatrix( );
+    EtxMatrix( ) = default;
+    EtxMatrix( uint32_t numNodes );
 
-    void calculateEtxMatrix( );
+    void initializeMatrix( uint32_t numNodes );
+
     void printEtxMatrix( );
+
+    void setEtx( size_t node, size_t neighbor, double etx );
 
     std::vector<std::vector<double>> getEtxMatrix( ) const { return m_etxMatrix; }
 
   private:
     uint32_t m_numNodes;
     std::vector<std::vector<double>> m_etxMatrix;
-    NodeContainer m_nodes;
-    std::vector<std::vector<Node>> m_neighbors;
 };
 
 #endif // ETXMATRIX_H

@@ -41,7 +41,7 @@ int main( int argc, char* argv[] )
   CommandLine cmd( __FILE__ );
   cmd.Parse( argc, argv );
 
-  AdhocNetwork adhocNetwork( 2, WIFI_STANDARD_80211a, "ns3::AdhocWifiMac", "10.1.1.0", "ns3::RandomRectanglePositionAllocator", 25.0 );
+  AdhocNetwork adhocNetwork( 10, WIFI_STANDARD_80211a, "ns3::AdhocWifiMac", "10.1.1.0", "ns3::RandomRectanglePositionAllocator", 25.0 );
   adhocNetwork.setup( );
 
   // Schedule the findNeighbors function to be called when simulation starts and every 5 seconds
@@ -55,18 +55,20 @@ int main( int argc, char* argv[] )
   Simulator::Destroy( );
 
   // Retrieve neighbors after the simulation has run
-  std::vector<std::vector<Node>> neighbors = adhocNetwork.getNeighbors( );
+  std::vector<std::vector<Ptr<Node>>> neighbors = adhocNetwork.getNeighbors( );
 
   // Print the neighbors
   for ( int i = 0; i < neighbors.size( ); i++ )
   {
     std::cout << "Node " << i << " neighbors: ";
-    for ( Node node : neighbors.at( i ) )
+    for ( Ptr<Node> node : neighbors.at( i ) )
     {
-      std::cout << node.GetId( ) << " ";
+      std::cout << node->GetId( ) << " ";
     }
     std::cout << std::endl;
   }
+
+  adhocNetwork.getEtxMatrix( ).printEtxMatrix( );
 
   return 0;
 }

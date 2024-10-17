@@ -26,28 +26,53 @@ class AdhocNetwork
 
     void findNeighbors( );
 
-    void setupApplications( );
-
     NodeContainer getNodes( ) const { return m_nodes; }
 
     NetDeviceContainer getDevices( ) const { return m_devices; }
 
     Ipv4InterfaceContainer getInterfaces( ) const { return m_interfaces; }
 
-    std::vector<std::vector<Node>> getNeighbors( ) const { return m_neighbors; }
+    std::vector<std::vector<Ptr<Node>>> getNeighbors( ) const { return m_neighbors; }
+
+    EtxMatrix getEtxMatrix( ) const { return m_etxMatrix; }
 
     void scheduleFindNeighbors( double interval );
 
     void initializeRandomPositions( double xMin, double xMax, double yMin, double yMax );
 
-    double CalculateETX( uint32_t nodeId, uint32_t neighborId );
+    void CalculateETX( uint32_t nodeId, uint32_t neighborId );
+
+    void CalculateETXHelper( uint32_t nodeId, std::vector<Ptr<Node>> neighbors );
+
+    void SendPackets( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors );
+
+    void SendPacketsHelper( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors );
+
+    void SetupDataReceiver( Ptr<Node> node, uint32_t nodeId );
+
+    uint32_t GetNodeIdFromIpAddress( Ipv4Address address );
+
+    void ReceivePacket( Ptr<Socket> socket );
+
+    void SetupAckReceiver( Ptr<Node> node, uint32_t nodeId );
+
+    void ReceiveAck( Ptr<Socket> socket );
 
   private:
+
+      struct LinkStats
+    {
+        uint32_t dataPacketsSent     = 0;
+        uint32_t dataPacketsReceived = 0;
+        uint32_t ackPacketsSent      = 0;
+        uint32_t ackPacketsReceived  = 0;
+    };
+
     uint32_t m_numNodes;
     WifiStandard m_wifiStandard;
     std::string m_macType;
     std::string m_ipBase;
-    std::vector<std::vector<Node>> m_neighbors;
+    std::vector<std::vector<Ptr<Node>>> m_neighbors;
     std::vector<Vector> m_positions;
 
     NodeContainer m_nodes;
@@ -57,15 +82,12 @@ class AdhocNetwork
     std::string m_positionAllocator;
     double m_communicationRange;
 
-    std::vector<std::vector<ns3::ApplicationContainer>> m_onOffApps;
-    std::vector<std::vector<ns3::ApplicationContainer>> m_packetSinks;
-
-    void m_trackPacketsSent( Ptr<const Packet> packet );
-    void m_trackPacketsReceived( Ptr<const Packet> packet, Address receiver );
-    std::vector<std::vector<uint32_t>> m_packetsSent;
-    std::vector<std::vector<uint32_t>> m_packetsReceived;
+    std::map<std::pair<uint32_t, uint32_t>, LinkStats> m_linkStats;
 
     void m_findNeighborsCallback( double interval );
+
+    EtxMatrix m_etxMatrix;
+
 };
 
 #endif // ADHOC_NETWORK_H

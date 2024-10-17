@@ -10,6 +10,7 @@ find_package(ns3 REQUIRED)
 file(GLOB SOURCES
     "*.cpp"
     "AdhocNetwork/*.cpp"
+    "EtxMatrix/*.cpp"
 )
 
 # Create the executable

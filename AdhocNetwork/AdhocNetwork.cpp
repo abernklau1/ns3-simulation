@@ -10,10 +10,6 @@ AdhocNetwork::AdhocNetwork( uint32_t numNodes, WifiStandard wifiStandard, std::s
 {
   m_neighbors.resize( numNodes );
   m_positions.resize( numNodes );
-  m_packetsSent.resize( numNodes );
-  m_packetsReceived.resize( numNodes );
-  m_onOffApps.resize( numNodes );
-  m_packetSinks.resize( numNodes );
 }
 
 void AdhocNetwork::setup( )
@@ -45,7 +41,22 @@ void AdhocNetwork::setup( )
   ipv4.SetBase( m_ipBase.c_str( ), "255.255.255.0" );
   m_interfaces = ipv4.Assign( m_devices );
 
-  setupApplications( );
+  wifiPhy.EnablePcapAll( "server-debug", false );
+
+  m_etxMatrix.initializeMatrix( m_numNodes );
+
+  for ( uint32_t i = 0; i < m_nodes.GetN( ); ++i )
+  {
+    Ptr<Node> node                   = m_nodes.Get( i );
+    uint32_t nodeId                  = node->GetId( );
+    std::vector<Ptr<Node>> neighbors = m_neighbors.at( i );
+
+    // Set up data receiver for the node
+    SetupDataReceiver( node, nodeId );
+
+    // Set up ACK receiver for the node
+    SetupAckReceiver( node, nodeId );
+  }
 }
 
 void AdhocNetwork::findNeighbors( )
@@ -75,14 +86,12 @@ void AdhocNetwork::findNeighbors( )
         double distance = CalculateDistance( pos_i, pos_j );
         if ( distance <= m_communicationRange )
         {
-          m_neighbors.at( i ).emplace_back( *m_nodes.Get( j ) );
+          m_neighbors.at( i ).emplace_back( m_nodes.Get( j ) );
         }
       }
     }
   }
 
-  // Setup applications after finding neighbors
-  setupApplications( );
 }
 
 void AdhocNetwork::scheduleFindNeighbors( double interval ) { Simulator::Schedule( Seconds( interval ), &AdhocNetwork::m_findNeighborsCallback, this, interval ); }
@@ -92,6 +101,16 @@ void AdhocNetwork::m_findNeighborsCallback( double interval )
   std::cout << "Finding neighbors" << std::endl;
   findNeighbors( );
   std::cout << "Neighbors found" << std::endl;
+  
+  for ( uint32_t i = 0; i < m_nodes.GetN( ); ++i )
+  {
+    Ptr<Node> node                  = m_nodes.Get( i );
+    std::vector<Ptr<Node>> neighbors = m_neighbors.at( i );
+    Simulator::Schedule( Seconds( 1.0 ), &AdhocNetwork::SendPacketsHelper, this, node, i, neighbors );
+
+    // Schedule ETX calculation
+    Simulator::Schedule( Seconds( 3.0 ), &AdhocNetwork::CalculateETXHelper, this, i, neighbors );
+  }
 
   scheduleFindNeighbors( interval );
 }
@@ -123,99 +142,136 @@ void AdhocNetwork::initializeRandomPositions( double xMin, double xMax, double y
   mobility.Install( m_nodes );
 }
 
-void AdhocNetwork::setupApplications( )
+// Function to calculate ETX
+void AdhocNetwork::CalculateETX( uint32_t nodeId, uint32_t neighborId )
 {
-  uint16_t basePort = 1024;
-  for ( size_t i = 0; i < m_nodes.GetN( ); ++i )
+  auto it = m_linkStats.find( { nodeId, neighborId } );
+  if ( it != m_linkStats.end( ) )
   {
-    for ( size_t j = 0; j < m_neighbors.at( i ).size( ); ++j )
-    {
-      // Ensure port number is unique
-      uint16_t port = basePort + i * m_neighbors.at( i ).size( ) + j;
+    LinkStats stats = it->second;
 
-      Node neighbor         = m_neighbors.at( i ).at( j );
-      Ptr<Node> neighborPtr = CreateObject<Node>( neighbor );
-      // Create OnOffApplication on node i
-      if ( !neighborPtr )
-      {
-        OnOffHelper onOff( "ns3::UdpSocketFactory", InetSocketAddress( m_interfaces.GetAddress( neighborPtr->GetId( ), 0 ), port ) );
-        m_onOffApps.at( i ).emplace_back( onOff.Install( m_nodes.Get( i ) ) );
-        onOff.SetConstantRate( DataRate( "500kbps" ) );
-        onOff.SetAttribute( "PacketSize", UintegerValue( 1024 ) );
-        onOff.SetAttribute( "MaxBytes", UintegerValue( 100 * 1024 ) ); // Simulate sending 100 packets
+    double df  = ( stats.dataPacketsSent > 0 ) ? static_cast<double>( stats.dataPacketsReceived ) / stats.dataPacketsSent : 0.0;
+    double dr  = ( stats.ackPacketsSent > 0 ) ? static_cast<double>( stats.ackPacketsReceived ) / stats.ackPacketsSent : 0.0;
+    double etx = ( df > 0 && dr > 0 ) ? 1.0 / ( df * dr ) : std::numeric_limits<double>::infinity( );
 
-        ApplicationContainer senderApp = onOff.Install( m_nodes.Get( i ) );
-        senderApp.Start( Simulator::Now( ) + Seconds( 1.0 ) );
-        senderApp.Stop( Simulator::Now( ) + Seconds( 3.0 ) );
-      }
+    m_etxMatrix.setEtx( nodeId, neighborId, etx );
 
-      // Create PacketSink on neighbor node
-      PacketSinkHelper packetSink( "ns3::UdpSocketFactory", InetSocketAddress( m_interfaces.GetAddress( neighborPtr->GetId( ), 0 ), port ) );
-      ApplicationContainer receiverApp = packetSink.Install( neighborPtr );
-      m_packetSinks.at( i ).emplace_back( receiverApp );
-      receiverApp.Start( Simulator::Now( ) );
-      receiverApp.Stop( Simulator::Now( ) + Seconds( 3.0 ) );
-      port++;
-    }
+    // Optional: Print ETX value for verification
+    std::cout << "ETX from Node " << nodeId << " to Node " << neighborId << " is " << etx << std::endl;
   }
-
-  // Set up OnOffApplications
-  for ( int i = 0; i < m_onOffApps.size( ); ++i )
+  else
   {
-    for ( int j = 0; j < m_onOffApps.at( i ).size( ); ++j )
-    {
-      uint32_t packedValue      = ( static_cast<uint32_t>( i ) << 16 ) | j;
-      Ptr<OnOffApplication> app = DynamicCast<OnOffApplication>( m_onOffApps.at( i ).at( j ).Get( 0 ) );
-      app->TraceConnectWithoutContext( "Tx", MakeCallback( &AdhocNetwork::m_trackPacketsSent, this ) );
-    }
+    std::cout << "No link stats available for Node " << nodeId << " to Node " << neighborId << std::endl;
   }
+}
 
-  // Set up PacketSinks
-  for ( int i = 0; i < m_packetSinks.size( ); ++i )
+void AdhocNetwork::CalculateETXHelper( uint32_t nodeId, std::vector<Ptr<Node>> neighbors )
+{
+  for ( Ptr<Node> neighbor : neighbors )
   {
-    for ( int j = 0; j < m_packetSinks.at( i ).size( ); ++j )
-    {
-      uint32_t packedValue = ( static_cast<uint32_t>( i ) << 16 ) | j;
+    CalculateETX( nodeId, neighbor->GetId( ) );
+  }
+}
 
-      Ptr<PacketSink> packetSink = DynamicCast<PacketSink>( m_packetSinks.at( i ).at( j ).Get( 0 ) );
-      packetSink->TraceConnectWithoutContext( "Rx", MakeCallback( &AdhocNetwork::m_trackPacketsReceived, this ) );
+void AdhocNetwork::SendPackets( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors )
+{
+  for ( Ptr<Node> receiverNode : neighbors )
+  {
+    uint32_t receiverId = receiverNode->GetId( );
+    uint16_t receiverPort = 8000 + receiverId;
+
+    // Create sockets
+    Ptr<Socket> senderSocket   = Socket::CreateSocket( senderNode, UdpSocketFactory::GetTypeId( ) );
+
+    // Connect sender socket to receiver
+    Ipv4Address receiverAddress  = receiverNode->GetObject<Ipv4>( )->GetAddress( 1, 0 ).GetLocal( );
+    InetSocketAddress remoteAddr = InetSocketAddress( receiverAddress, receiverPort );
+    senderSocket->Connect( remoteAddr );
+
+    // Send packets
+    for ( uint32_t k = 0; k < 100; ++k )
+    {
+      Ptr<Packet> packet = Create<Packet>( 1024 );
+      senderSocket->Send( packet );
+      m_linkStats[{ senderId, receiverId }].dataPacketsSent++;
     }
   }
 }
 
-void AdhocNetwork::m_trackPacketsSent( Ptr<const Packet> packet ) { std::cout << "Packet sent" << std::endl; }
-
-void AdhocNetwork::m_trackPacketsReceived( Ptr<const Packet> packet, Address receiver ) { std::cout << "Packet received" << std::endl; }
-
-// Function to calculate ETX
-double AdhocNetwork::CalculateETX( uint32_t nodeId, uint32_t neighborId )
+void AdhocNetwork::SendPacketsHelper( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors )
 {
-  // Ensure indices are within bounds
-  if ( neighborId >= m_packetsReceived.size( ) )
+  SendPackets( senderNode, senderId, neighbors );
+}
+
+void AdhocNetwork::SetupDataReceiver( Ptr<Node> node, uint32_t nodeId )
+{
+  Ptr<Socket> receiverSocket  = Socket::CreateSocket( node, UdpSocketFactory::GetTypeId( ) );
+  uint16_t receiverPort       = 8000 + nodeId;
+  InetSocketAddress localAddr = InetSocketAddress( Ipv4Address::GetAny( ), receiverPort );
+  receiverSocket->Bind( localAddr );
+  receiverSocket->SetRecvCallback( MakeCallback( &AdhocNetwork::ReceivePacket, this ) );
+}
+
+uint32_t AdhocNetwork::GetNodeIdFromIpAddress( Ipv4Address address )
+{
+  for ( uint32_t i = 0; i < m_nodes.GetN( ); ++i )
   {
-    std::cerr << "Invalid node or neighbor ID" << std::endl;
-    return std::numeric_limits<double>::infinity( ); // Return a large value to indicate error
+    Ipv4Address nodeAddress = m_nodes.Get( i )->GetObject<Ipv4>( )->GetAddress( 1, 0 ).GetLocal( );
+    if ( nodeAddress == address )
+    {
+      return i; // Node ID
+    }
   }
+  NS_ASSERT_MSG( false, "Node ID not found for IP address " << address );
+  return UINT32_MAX; // Should never reach here
+}
 
-  std::cout << m_packetsSent.at( nodeId ).size( ) << std::endl;
+void AdhocNetwork::ReceivePacket( Ptr<Socket> socket )
+{
+  Ptr<Packet> packet;
+  Address from;
+  while ( ( packet = socket->RecvFrom( from ) ) )
+  {
+    InetSocketAddress addr    = InetSocketAddress::ConvertFrom( from );
+    Ipv4Address senderAddress = addr.GetIpv4( );
 
-  // // Get the number of packets sent and received
-  // uint32_t sent     = m_packetsSent.at( nodeId ).at( neighborId );
-  // uint32_t received = m_packetsReceived.at( nodeId ).at( neighborId );
+    uint32_t senderId   = GetNodeIdFromIpAddress( senderAddress );
+    uint32_t receiverId = socket->GetNode( )->GetId( );
 
-  // // Avoid division by zero
-  // if ( sent == 0 || received == 0 )
-  // {
-  //   std::cerr << "No packets sent or received" << std::endl;
-  //   return std::numeric_limits<double>::infinity( ); // Return a large value to indicate error
-  // }
+    m_linkStats[{ senderId, receiverId }].dataPacketsReceived++;
 
-  // // Calculate delivery ratios
-  // double df = static_cast<double>( received ) / sent;
-  // double dr = static_cast<double>( sent ) / received;
+    // Send ACK back to sender's ACK port
+    Ptr<Socket> ackSocket     = Socket::CreateSocket( socket->GetNode( ), UdpSocketFactory::GetTypeId( ) );
+    uint16_t senderAckPort    = 9000 + senderId;
+    InetSocketAddress ackAddr = InetSocketAddress( senderAddress, senderAckPort );
+    ackSocket->Connect( ackAddr );
+    Ptr<Packet> ackPacket = Create<Packet>( 0 ); // Empty ACK packet
+    ackSocket->Send( ackPacket );
+    m_linkStats[{ receiverId, senderId }].ackPacketsSent++;
+  }
+}
 
-  // // Calculate ETX
-  // return 1.0 / ( df * dr );
+void AdhocNetwork::SetupAckReceiver( Ptr<Node> node, uint32_t nodeId )
+{
+  Ptr<Socket> ackReceiverSocket = Socket::CreateSocket( node, UdpSocketFactory::GetTypeId( ) );
+  uint16_t ackPort              = 9000 + nodeId;
+  InetSocketAddress localAddr   = InetSocketAddress( Ipv4Address::GetAny( ), ackPort );
+  ackReceiverSocket->Bind( localAddr );
+  ackReceiverSocket->SetRecvCallback( MakeCallback( &AdhocNetwork::ReceiveAck, this ) );
+}
 
-  return 1.0;
+void AdhocNetwork::ReceiveAck( Ptr<Socket> socket )
+{
+  Ptr<Packet> packet;
+  Address from;
+  while ( ( packet = socket->RecvFrom( from ) ) )
+  {
+    InetSocketAddress addr      = InetSocketAddress::ConvertFrom( from );
+    Ipv4Address neighborAddress = addr.GetIpv4( );
+
+    uint32_t neighborId = GetNodeIdFromIpAddress( neighborAddress );
+    uint32_t nodeId     = socket->GetNode( )->GetId( );
+
+    m_linkStats[{ nodeId, neighborId }].ackPacketsReceived++;
+  }
 }
