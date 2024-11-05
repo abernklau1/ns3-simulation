@@ -1,19 +1,5 @@
-#include "ns3/command-line.h"
-#include "ns3/config.h"
-#include "ns3/gnuplot.h"
-#include "ns3/ipv4-address-helper.h"
-#include "ns3/log.h"
-#include "ns3/mobility-helper.h"
-#include "ns3/mobility-model.h"
-#include "ns3/on-off-helper.h"
-#include "ns3/packet-socket-address.h"
-#include "ns3/packet-socket-helper.h"
-#include "ns3/string.h"
-#include "ns3/uinteger.h"
-#include "ns3/yans-wifi-channel.h"
-#include "ns3/yans-wifi-helper.h"
-
 #include "AdhocNetwork/AdhocNetwork.h"
+#include "ns3/command-line.h"
 
 using namespace ns3;
 
@@ -34,41 +20,49 @@ using namespace ns3;
  * Default values for wifiStandard are: WIFI_STANDARD_80211a.
  * Default values for macType are: "ns3::AdhocWifiMac".
  * Default values for ipBase are: "10.1.1.0".
- * Default values for communicationRange are: 5.0.
+ * Default values for communicationRange are: 25.0.
  */
 int main( int argc, char* argv[] )
 {
-  CommandLine cmd( __FILE__ );
-  cmd.Parse( argc, argv );
+    CommandLine cmd( __FILE__ );
+    cmd.Parse( argc, argv );
 
-  AdhocNetwork adhocNetwork( 10, WIFI_STANDARD_80211a, "ns3::AdhocWifiMac", "10.1.1.0", "ns3::RandomRectanglePositionAllocator", 25.0 );
-  adhocNetwork.setup( );
+    uint32_t numNodes = 10;
 
-  // Schedule the findNeighbors function to be called when simulation starts and every 5 seconds
-  Simulator::Schedule( Seconds( 0.0 ), MakeEvent( &AdhocNetwork::findNeighbors, &adhocNetwork ) );
-  adhocNetwork.scheduleFindNeighbors( 5.0 );
+    AdhocNetwork adhocNetwork( numNodes, WIFI_STANDARD_80211a, "ns3::AdhocWifiMac", "10.1.1.0", "ns3::RandomRectanglePositionAllocator", 25.0 );
+    adhocNetwork.setup( );
 
-  // Set the simulation to stop after 100 seconds
-  Simulator::Stop( Seconds( 100.0 ) );
-
-  Simulator::Run( );
-  Simulator::Destroy( );
-
-  // Retrieve neighbors after the simulation has run
-  std::vector<std::vector<Ptr<Node>>> neighbors = adhocNetwork.getNeighbors( );
-
-  // Print the neighbors
-  for ( int i = 0; i < neighbors.size( ); i++ )
-  {
-    std::cout << "Node " << i << " neighbors: ";
-    for ( Ptr<Node> node : neighbors.at( i ) )
+    // Schedule every node to find their neighbors 1 second into the simulation
+    for ( int i = 0; i < numNodes; i++ )
     {
-      std::cout << node->GetId( ) << " ";
+        Simulator::Schedule( Seconds( 0.0 ), MakeEvent( &AdhocNetwork::findNeighbors, &adhocNetwork, i ) );
     }
-    std::cout << std::endl;
-  }
 
-  adhocNetwork.getEtxMatrix( ).printEtxMatrix( );
+    // NOTE: This may still need to occur later when the mobility model is randomized instead of constant
+    // adhocNetwork.scheduleFindNeighbors( 5.0 );
 
-  return 0;
+    // Set the simulation to stop after 100 seconds
+    Simulator::Stop( Seconds( 100.0 ) );
+
+    Simulator::Run( );
+    Simulator::Destroy( );
+
+    // Retrieve neighbors after the simulation has run
+    std::vector<std::vector<Ptr<Node>>> neighbors = adhocNetwork.getNeighbors( );
+
+    // Print the neighbors
+    for ( int i = 0; i < neighbors.size( ); i++ )
+    {
+        std::cout << "Node " << i << " neighbors: ";
+        for ( Ptr<Node> node : neighbors.at( i ) )
+        {
+            std::cout << node->GetId( ) << " ";
+        }
+        std::cout << std::endl;
+    }
+
+    // Print ETX matrix
+    adhocNetwork.getEtxMatrix( ).printEtxMatrix( );
+
+    return 0;
 }

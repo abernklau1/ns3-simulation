@@ -3,16 +3,9 @@
 
 #include "ns3/core-module.h"
 #include "ns3/internet-module.h"
-#include "ns3/log.h"
 #include "ns3/mobility-module.h"
 #include "ns3/network-module.h"
-#include "ns3/node.h"
-#include "ns3/on-off-helper.h"
-#include "ns3/onoff-application.h"
-#include "ns3/packet-sink-helper.h"
-#include "ns3/simulator.h"
 #include "ns3/wifi-module.h"
-#include <iostream>
 
 using namespace ns3;
 

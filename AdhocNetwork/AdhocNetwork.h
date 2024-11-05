@@ -10,84 +10,116 @@
 #include "ns3/simulator.h"
 #include "ns3/wifi-module.h"
 
+#include <unordered_set>
+
 #include "../EtxMatrix/EtxMatrix.h"
 
 using namespace ns3;
 
 #ifndef ADHOC_NETWORK_H
-  #define ADHOC_NETWORK_H
+    #define ADHOC_NETWORK_H
+
+// Define a custom hash function for std::pair if not already defined
+namespace std
+{
+    template <> struct hash<std::pair<uint32_t, uint32_t>>
+    {
+            size_t operator( )( const std::pair<uint32_t, uint32_t>& p ) const { return std::hash<uint32_t>( )( p.first ) ^ ( std::hash<uint32_t>( )( p.second ) << 1 ); }
+    };
+} // namespace std
 
 class AdhocNetwork
 {
-  public:
-    AdhocNetwork( uint32_t numNodes, WifiStandard wifiStandard, std::string macType, std::string ipBase, std::string positionAllocator, double communicationRange );
+    public:
+        AdhocNetwork( uint32_t numNodes, WifiStandard wifiStandard, std::string macType, std::string ipBase, std::string positionAllocator, double communicationRange );
+        ~AdhocNetwork( );
 
-    void setup( );
+        void setup( );
 
-    void findNeighbors( );
+        void findNeighbors( uint32_t nodeId );
 
-    NodeContainer getNodes( ) const { return m_nodes; }
+        void findNeighborsSubset( uint32_t nodeId );
 
-    NetDeviceContainer getDevices( ) const { return m_devices; }
+        NodeContainer getNodes( ) const { return m_nodes; }
 
-    Ipv4InterfaceContainer getInterfaces( ) const { return m_interfaces; }
+        uint32_t getNumNodes( ) const { return m_numNodes; }
 
-    std::vector<std::vector<Ptr<Node>>> getNeighbors( ) const { return m_neighbors; }
+        NetDeviceContainer getDevices( ) const { return m_devices; }
 
-    EtxMatrix getEtxMatrix( ) const { return m_etxMatrix; }
+        Ipv4InterfaceContainer getInterfaces( ) const { return m_interfaces; }
 
-    void scheduleFindNeighbors( double interval );
+        std::vector<std::vector<Ptr<Node>>> getNeighbors( ) const { return m_neighbors; }
 
-    void initializeRandomPositions( double xMin, double xMax, double yMin, double yMax );
+        EtxMatrix getEtxMatrix( ) const { return m_etxMatrix; }
 
-    void CalculateETX( uint32_t nodeId, uint32_t neighborId );
+        void scheduleFindNeighbors( double interval );
 
-    void CalculateETXHelper( uint32_t nodeId, std::vector<Ptr<Node>> neighbors );
+        void initializeRandomPositions( double xMin, double xMax, double yMin, double yMax );
 
-    void SendPackets( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors );
+        void CalculateETX( uint32_t nodeId, uint32_t neighborId );
 
-    void SendPacketsHelper( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors );
+        void CalculateETXHelper( uint32_t nodeId, const std::vector<Ptr<Node>>& neighbors );
 
-    void SetupDataReceiver( Ptr<Node> node, uint32_t nodeId );
+        Ptr<Socket> GetSenderSocket( uint32_t senderId, uint32_t receiverId );
 
-    uint32_t GetNodeIdFromIpAddress( Ipv4Address address );
+        void SendPackets( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors );
 
-    void ReceivePacket( Ptr<Socket> socket );
+        void SendPacketsHelper( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors );
 
-    void SetupAckReceiver( Ptr<Node> node, uint32_t nodeId );
+        void SetupDataReceiver( Ptr<Node> node, uint32_t nodeId );
 
-    void ReceiveAck( Ptr<Socket> socket );
+        uint32_t GetNodeIdFromIpAddress( Ipv4Address address );
 
-  private:
+        Ptr<Socket> GetAckSocket( uint32_t receiverId, uint32_t senderId );
 
-      struct LinkStats
-    {
-        uint32_t dataPacketsSent     = 0;
-        uint32_t dataPacketsReceived = 0;
-        uint32_t ackPacketsSent      = 0;
-        uint32_t ackPacketsReceived  = 0;
-    };
+        void ReceivePacket( Ptr<Socket> socket );
 
-    uint32_t m_numNodes;
-    WifiStandard m_wifiStandard;
-    std::string m_macType;
-    std::string m_ipBase;
-    std::vector<std::vector<Ptr<Node>>> m_neighbors;
-    std::vector<Vector> m_positions;
+        void SetupAckReceiver( Ptr<Node> node, uint32_t nodeId );
 
-    NodeContainer m_nodes;
-    NetDeviceContainer m_devices;
-    Ipv4InterfaceContainer m_interfaces;
+        void ReceiveAck( Ptr<Socket> socket );
 
-    std::string m_positionAllocator;
-    double m_communicationRange;
+    private:
+        struct LinkStats
+        {
+                uint32_t dataPacketsSent     = 0;
+                uint32_t dataPacketsReceived = 0;
+                uint32_t ackPacketsSent      = 0;
+                uint32_t ackPacketsReceived  = 0;
+        };
 
-    std::map<std::pair<uint32_t, uint32_t>, LinkStats> m_linkStats;
+        struct NodeStats
+        {
+                Node node;
+                uint32_t numNeighbors;
+                uint32_t numNeighborsSubset;
+                std::vector<Ptr<Node>> neighbors;
+                std::vector<Ptr<Node>> neighborsSubset;
+                LinkStats linkStats;
+        };
 
-    void m_findNeighborsCallback( double interval );
+        uint32_t m_numNodes;
+        WifiStandard m_wifiStandard;
+        std::string m_macType;
+        std::string m_ipBase;
+        std::vector<std::vector<Ptr<Node>>> m_neighbors;
+        std::vector<std::vector<Ptr<Node>>> m_neighborsSubset;
+        std::vector<Vector> m_positions;
 
-    EtxMatrix m_etxMatrix;
+        std::unordered_map<std::pair<uint32_t, uint32_t>, Ptr<Socket>> m_senderSockets;
+        std::unordered_map<std::pair<uint32_t, uint32_t>, Ptr<Socket>> m_ackSockets;
 
+        NodeContainer m_nodes;
+        NetDeviceContainer m_devices;
+        Ipv4InterfaceContainer m_interfaces;
+
+        std::string m_positionAllocator;
+        double m_communicationRange;
+
+        std::map<std::pair<uint32_t, uint32_t>, LinkStats> m_linkStats;
+
+        void m_findNeighborsCallback( double interval );
+
+        EtxMatrix m_etxMatrix;
 };
 
 #endif // ADHOC_NETWORK_H
