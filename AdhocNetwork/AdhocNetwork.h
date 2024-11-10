@@ -1,5 +1,6 @@
 #include "ns3/core-module.h"
 #include "ns3/internet-module.h"
+#include "ns3/log.h"
 #include "ns3/mobility-helper.h"
 #include "ns3/mobility-module.h"
 #include "ns3/network-module.h"
@@ -13,6 +14,7 @@
 #include <unordered_set>
 
 #include "../EtxMatrix/EtxMatrix.h"
+#include "../GossipHeader.h"
 
 using namespace ns3;
 
@@ -50,6 +52,8 @@ class AdhocNetwork
 
         std::vector<std::vector<Ptr<Node>>> getNeighbors( ) const { return m_neighbors; }
 
+        std::vector<std::vector<Ptr<Node>>> getNeighborsSubset( ) const { return m_neighborsSubset; }
+
         EtxMatrix getEtxMatrix( ) const { return m_etxMatrix; }
 
         void scheduleFindNeighbors( double interval );
@@ -78,6 +82,12 @@ class AdhocNetwork
 
         void ReceiveAck( Ptr<Socket> socket );
 
+        void InitializeNodeCoverageSets( );
+
+        double calculateUtility( uint32_t nodeId, std::set<std::pair<uint32_t, uint32_t>> localCoverageSet );
+
+        uint32_t calculateCoverage( uint32_t nodeId, std::set<std::pair<uint32_t, uint32_t>> localCoverageSet, uint32_t coverageType );
+
     private:
         struct LinkStats
         {
@@ -85,16 +95,6 @@ class AdhocNetwork
                 uint32_t dataPacketsReceived = 0;
                 uint32_t ackPacketsSent      = 0;
                 uint32_t ackPacketsReceived  = 0;
-        };
-
-        struct NodeStats
-        {
-                Node node;
-                uint32_t numNeighbors;
-                uint32_t numNeighborsSubset;
-                std::vector<Ptr<Node>> neighbors;
-                std::vector<Ptr<Node>> neighborsSubset;
-                LinkStats linkStats;
         };
 
         uint32_t m_numNodes;
@@ -111,6 +111,14 @@ class AdhocNetwork
         NodeContainer m_nodes;
         NetDeviceContainer m_devices;
         Ipv4InterfaceContainer m_interfaces;
+
+        uint32_t m_gossipGroupSize;
+        std::vector<std::set<std::pair<uint32_t, uint32_t>>> m_nodeCoverageSets;
+        uint32_t m_alpha;
+        uint32_t m_beta;
+        uint32_t m_lambda;
+
+        std::vector<std::set<uint32_t>> m_receivedPackets;
 
         std::string m_positionAllocator;
         double m_communicationRange;

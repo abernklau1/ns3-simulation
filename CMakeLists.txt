@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.12)
-project(NS3Simulation)
+project(sim)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Find NS-3
 find_package(ns3 REQUIRED)
-
+add_definitions(-DNS3_LOG_ENABLE)
 # Gather all source files
 file(GLOB SOURCES
     "*.cpp"
@@ -14,7 +14,7 @@ file(GLOB SOURCES
 )
 
 # Create the executable
-add_executable(NS3Simulation ${SOURCES})
+add_executable(sim ${SOURCES})
 
 # Windows with MinGW Installations
 if( ${CMAKE_SYSTEM_NAME} MATCHES "Windows" AND MINGW )
@@ -41,3 +41,5 @@ elseif( UNIX AND ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
     # update the lib directory location
     target_link_directories(${PROJECT_NAME} PUBLIC "/usr/local/lib")
 endif()
+
+
