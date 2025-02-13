@@ -10,7 +10,6 @@ add_definitions(-DNS3_LOG_ENABLE)
 file(GLOB SOURCES
     "*.cpp"
     "AdhocNetwork/*.cpp"
-    "EtxMatrix/*.cpp"
 )
 
 # Create the executable

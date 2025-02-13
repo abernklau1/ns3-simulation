@@ -12,7 +12,7 @@ using namespace ns3;
 #define NUM_SENSORS         3
 #define NUM_AREAS           3
 #define NUM_RUNS            200
-#define COMMUNICATION_RANGE 80.0
+#define COMMUNICATION_RANGE 70.0
 #define MAX_RUN_TIME        100000.0
 #define GRID_X              100.0
 #define GRID_Y              100.0
@@ -47,7 +47,6 @@ int main( int argc, char* argv[] )
 
     LogComponentEnable( "MainSimulation", LOG_LEVEL_INFO );
     LogComponentEnable( "AdhocNetwork", LOG_LEVEL_INFO );
-    LogComponentEnable( "EtxMatrix", LOG_LEVEL_INFO );
     LogComponentEnable( "GossipHeader", LOG_LEVEL_INFO );
 
     CommandLine cmd( __FILE__ );

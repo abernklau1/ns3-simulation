@@ -75,7 +75,7 @@ AdhocNetwork::~AdhocNetwork( )
 {
     NS_LOG_INFO( "Destroying AdhocNetwork" );
 
-    // 1. Close and clear all sender sockets
+    // Close and clear all sender sockets
     for ( auto& [link, socket] : m_senderSockets )
     {
         if ( socket )
@@ -85,23 +85,13 @@ AdhocNetwork::~AdhocNetwork( )
     }
     m_senderSockets.clear( );
 
-    // 2. Close and clear all ACK sockets
-    for ( auto& [link, socket] : m_ackSockets )
-    {
-        if ( socket )
-        {
-            socket->Close( );
-        }
-    }
-    m_ackSockets.clear( );
-
-    // 3. Drop any netdevices, interfaces, and nodes
+    // Drop any netdevices, interfaces, and nodes
     //    (they are smart pointers, but clearing them makes ownership explicit)
     m_devices    = NetDeviceContainer( );     // just replace with empty container
     m_interfaces = Ipv4InterfaceContainer( ); // likewise
     m_nodes      = NodeContainer( );          // likewise
 
-    // 4. Clear out all std::vectors, sets, etc.
+    // Clear out all std::vectors, sets, etc.
     m_neighbors.clear( );
     m_positions.clear( );
     m_neighborsSubset.clear( );
@@ -119,12 +109,9 @@ AdhocNetwork::~AdhocNetwork( )
     m_neighborSensorBitset.clear( );
     m_neighborAreaBitset.clear( );
 
-    // 5. Clear out sets of sensor types and areas
+    // Clear out sets of sensor types and areas
     m_sensorTypes.clear( );
     m_areas.clear( );
-
-    // Also clear out link stats
-    m_linkStats.clear( );
 
     NS_LOG_INFO( "AdhocNetwork destroyed" );
 }
@@ -166,16 +153,15 @@ void AdhocNetwork::setup( )
     wifiPhy.EnablePcapAll( "server-debug", false );
     NS_LOG_INFO( "Pcap enabled" );
 
-    NS_LOG_INFO( "Setting up data and ACK receivers" );
+    NS_LOG_INFO( "Setting up data receivers" );
     for ( uint32_t i = 0; i < m_nodes.GetN( ); ++i )
     {
-        NS_LOG_INFO( "Setting up data and ACK receivers for node " << i );
+        NS_LOG_INFO( "Setting up data receiver for node " << i );
         Ptr<Node> node  = m_nodes.Get( i );
         uint32_t nodeId = node->GetId( );
         SetupDataReceiver( node, nodeId );
-        SetupAckReceiver( node, nodeId );
     }
-    NS_LOG_INFO( "Data and ACK receivers set up" );
+    NS_LOG_INFO( "Data receivers set up" );
 
     InitializeNodeCoverageSets( );
 }
@@ -350,10 +336,9 @@ void AdhocNetwork::SendPackets( Ptr<Node> senderNode, uint32_t senderId, std::ve
             }
             else
             {
-                m_linkStats[{ senderId, receiverId }].dataPacketsSent++;
+                NS_LOG_INFO( "Node " << senderId << " sent 1 packet to Node " << receiverId );
             }
         } );
-        NS_LOG_INFO( "Node " << senderId << " sent 1 packet to Node " << receiverId );
     }
 }
 
@@ -397,34 +382,6 @@ uint32_t AdhocNetwork::GetNodeIdFromIpAddress( Ipv4Address address )
 }
 
 //
-// GetAckSocket: return or create an ACK socket between two nodes.
-//
-Ptr<Socket> AdhocNetwork::GetAckSocket( uint32_t receiverId, uint32_t senderId )
-{
-    std::pair<uint32_t, uint32_t> link = { receiverId, senderId };
-    Ptr<Node> receiverNode             = m_nodes.Get( receiverId );
-    Ptr<Node> senderNode               = m_nodes.Get( senderId );
-    auto it                            = m_ackSockets.find( link );
-    if ( it != m_ackSockets.end( ) )
-    {
-        return it->second;
-    }
-    else
-    {
-        Ptr<Socket> ackSocket     = Socket::CreateSocket( receiverNode, UdpSocketFactory::GetTypeId( ) );
-        Ipv4Address senderAddress = senderNode->GetObject<Ipv4>( )->GetAddress( 1, 0 ).GetLocal( );
-        InetSocketAddress ackAddr = InetSocketAddress( senderAddress, 9000 + senderId );
-        if ( ackSocket->Connect( ackAddr ) == -1 )
-        {
-            NS_LOG_ERROR( "Failed to connect ACK Socket from Node " << receiverId << " to Node " << senderId );
-            return nullptr;
-        }
-        m_ackSockets[link] = ackSocket;
-        return ackSocket;
-    }
-}
-
-//
 // ReceivePacket: process incoming data packets.
 //
 void AdhocNetwork::ReceivePacket( Ptr<Socket> socket )
@@ -445,7 +402,6 @@ void AdhocNetwork::ReceivePacket( Ptr<Socket> socket )
         // Remove and process the GossipHeader.
         GossipHeader gossipHeader;
         packet->RemoveHeader( gossipHeader );
-        m_linkStats[{ senderId, receiverId }].dataPacketsReceived++;
 
         // Avoid processing duplicate packets.
         if ( m_receivedPackets[receiverId].find( gossipHeader.GetOriginNodeId( ) ) == m_receivedPackets[receiverId].end( ) )
@@ -511,46 +467,6 @@ void AdhocNetwork::ReceivePacket( Ptr<Socket> socket )
                 Simulator::Stop( Seconds( Simulator::Now( ).GetSeconds( ) ) );
             }
         }
-    }
-}
-
-//
-// SetupAckReceiver: create and bind the ACK receiver socket for a node.
-//
-void AdhocNetwork::SetupAckReceiver( Ptr<Node> node, uint32_t nodeId )
-{
-    Ptr<Socket> ackReceiverSocket = Socket::CreateSocket( node, UdpSocketFactory::GetTypeId( ) );
-    uint16_t ackPort              = 9000 + nodeId;
-    InetSocketAddress localAddr   = InetSocketAddress( Ipv4Address::GetAny( ), ackPort );
-    if ( ackReceiverSocket->Bind( localAddr ) == -1 )
-    {
-        NS_LOG_ERROR( "Failed to bind ACK Receiver Socket on Node " << nodeId << " port " << ackPort );
-        return;
-    }
-    ackReceiverSocket->SetRecvCallback( MakeCallback( &AdhocNetwork::ReceiveAck, this ) );
-    NS_LOG_INFO( "ACK Receiver Socket bound on Node " << nodeId << " port " << ackPort );
-}
-
-//
-// ReceiveAck: process incoming ACK packets.
-//
-void AdhocNetwork::ReceiveAck( Ptr<Socket> socket )
-{
-    Ptr<Packet> packet;
-    Address from;
-    while ( ( packet = socket->RecvFrom( from ) ) )
-    {
-        InetSocketAddress addr      = InetSocketAddress::ConvertFrom( from );
-        Ipv4Address neighborAddress = addr.GetIpv4( );
-        uint32_t neighborId         = GetNodeIdFromIpAddress( neighborAddress );
-        uint32_t nodeId             = socket->GetNode( )->GetId( );
-        if ( neighborId == UINT32_MAX )
-        {
-            NS_LOG_WARN( "Received ACK from unknown neighbor address: " << neighborAddress );
-            continue;
-        }
-        m_linkStats[{ nodeId, neighborId }].ackPacketsReceived++;
-        NS_LOG_INFO( "Node " << nodeId << " received ACK from Node " << neighborId );
     }
 }
 

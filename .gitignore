@@ -1,5 +1,11 @@
 build/
 .cache/
 .vscode/
-server*
 .DS_Store
+*.log
+*.pcap
+*.vcd
+*.xml
+*.vtu
+*.vtp
+*.vti

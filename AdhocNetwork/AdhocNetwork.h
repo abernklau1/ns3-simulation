@@ -74,23 +74,12 @@ class AdhocNetwork
         void SendPacketsHelper( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors );
         void SetupDataReceiver( Ptr<Node> node, uint32_t nodeId );
         uint32_t GetNodeIdFromIpAddress( Ipv4Address address );
-        Ptr<Socket> GetAckSocket( uint32_t receiverId, uint32_t senderId );
         void ReceivePacket( Ptr<Socket> socket );
-        void SetupAckReceiver( Ptr<Node> node, uint32_t nodeId );
-        void ReceiveAck( Ptr<Socket> socket );
         void InitializeNodeCoverageSets( );
         std::pair<uint32_t, uint32_t> SetCoverage( uint32_t nodeId );
         int getMinCoverage( );
 
     private:
-        struct LinkStats
-        {
-                uint32_t dataPacketsSent     = 0;
-                uint32_t dataPacketsReceived = 0;
-                uint32_t ackPacketsSent      = 0;
-                uint32_t ackPacketsReceived  = 0;
-        };
-
         uint32_t m_numNodes;
         uint32_t m_numSensors;
         uint32_t m_numAreas;
@@ -104,7 +93,6 @@ class AdhocNetwork
         double m_gridY;
 
         std::unordered_map<std::pair<uint32_t, uint32_t>, Ptr<Socket>> m_senderSockets;
-        std::unordered_map<std::pair<uint32_t, uint32_t>, Ptr<Socket>> m_ackSockets;
 
         NodeContainer m_nodes;
         NetDeviceContainer m_devices;
@@ -141,8 +129,6 @@ class AdhocNetwork
 
         std::string m_positionAllocator;
         double m_communicationRange;
-
-        std::map<std::pair<uint32_t, uint32_t>, LinkStats> m_linkStats;
 
         void m_findNeighborsCallback( double interval );
         bool m_isCovered( uint32_t receiverId );
