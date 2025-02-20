@@ -3,31 +3,35 @@
 NS_LOG_COMPONENT_DEFINE( "GossipHeader" );
 
 GossipHeader::GossipHeader( )
-    : m_originNodeId( 0 ),
-      m_dataSize( 0 )
+    : _originNodeId( 0 ),
+      _dataSize( 0 )
 {
 }
 
 GossipHeader::GossipHeader( uint32_t originNodeId, std::set<std::pair<uint32_t, uint32_t>> coverageSet, uint32_t dataSize )
-    : m_originNodeId( originNodeId ),
-      m_coverageSet( coverageSet ),
-      m_dataSize( dataSize )
+    : _originNodeId( originNodeId ),
+      _coverageSet( coverageSet ),
+      _dataSize( dataSize )
 {
 }
 
 GossipHeader::~GossipHeader( ) { }
 
-void GossipHeader::SetOriginNodeId( uint32_t originNodeId ) { m_originNodeId = originNodeId; }
+void GossipHeader::SetOriginNodeId( uint32_t originNodeId ) { _originNodeId = originNodeId; }
 
-uint32_t GossipHeader::GetOriginNodeId( ) const { return m_originNodeId; }
+uint32_t GossipHeader::GetOriginNodeId( ) const { return _originNodeId; }
 
-void GossipHeader::SetCoverageSet( const std::set<std::pair<uint32_t, uint32_t>>& coverageSet ) { m_coverageSet = coverageSet; }
+void GossipHeader::SetCoverageSet( const std::set<std::pair<uint32_t, uint32_t>>& coverageSet ) { _coverageSet = coverageSet; }
 
-std::set<std::pair<uint32_t, uint32_t>> GossipHeader::GetCoverageSet( ) const { return m_coverageSet; }
+std::set<std::pair<uint32_t, uint32_t>> GossipHeader::GetCoverageSet( ) const { return _coverageSet; }
 
-void GossipHeader::SetDataSize( uint32_t dataSize ) { m_dataSize = dataSize; }
+void GossipHeader::SetDataSize( uint32_t dataSize ) { _dataSize = dataSize; }
 
-uint32_t GossipHeader::GetDataSize( ) const { return m_dataSize; }
+uint32_t GossipHeader::GetDataSize( ) const { return _dataSize; }
+
+//============================================================================
+// Header interface implementation
+//============================================================================
 
 TypeId GossipHeader::GetTypeId( )
 {
@@ -39,11 +43,11 @@ TypeId GossipHeader::GetInstanceTypeId( ) const { return GetTypeId( ); }
 
 void GossipHeader::Print( std::ostream& os ) const
 {
-    os << "OriginNodeId=" << m_originNodeId << ", DataSize=" << m_dataSize << ", CoverageSet={";
-    for ( auto it = m_coverageSet.begin( ); it != m_coverageSet.end( ); ++it )
+    os << "OriginNodeId=" << _originNodeId << ", DataSize=" << _dataSize << ", CoverageSet={";
+    for ( auto it = _coverageSet.begin( ); it != _coverageSet.end( ); ++it )
     {
         os << "(" << it->first << "," << it->second << ")";
-        if ( std::next( it ) != m_coverageSet.end( ) )
+        if ( std::next( it ) != _coverageSet.end( ) )
             os << ",";
     }
     os << "}";
@@ -51,17 +55,17 @@ void GossipHeader::Print( std::ostream& os ) const
 
 uint32_t GossipHeader::GetSerializedSize( ) const
 {
-    uint32_t size = 4 + 4 + 4;                 // m_originNodeId, m_dataSize, coverage set size
-    size += m_coverageSet.size( ) * ( 4 + 4 ); // Each pair of uint32_t
+    uint32_t size = 4 + 4 + 4;                // _originNodeId, _dataSize, coverage set size
+    size += _coverageSet.size( ) * ( 4 + 4 ); // Each pair of uint32_t
     return size;
 }
 
 void GossipHeader::Serialize( Buffer::Iterator start ) const
 {
-    start.WriteHtonU32( m_originNodeId );
-    start.WriteHtonU32( m_dataSize );
-    start.WriteHtonU32( m_coverageSet.size( ) );
-    for ( auto& pair : m_coverageSet )
+    start.WriteHtonU32( _originNodeId );
+    start.WriteHtonU32( _dataSize );
+    start.WriteHtonU32( _coverageSet.size( ) );
+    for ( auto& pair : _coverageSet )
     {
         start.WriteHtonU32( pair.first );  // Sensor type
         start.WriteHtonU32( pair.second ); // Area coverage
@@ -70,15 +74,15 @@ void GossipHeader::Serialize( Buffer::Iterator start ) const
 
 uint32_t GossipHeader::Deserialize( Buffer::Iterator start )
 {
-    m_originNodeId   = start.ReadNtohU32( );
-    m_dataSize       = start.ReadNtohU32( );
+    _originNodeId    = start.ReadNtohU32( );
+    _dataSize        = start.ReadNtohU32( );
     uint32_t setSize = start.ReadNtohU32( );
-    m_coverageSet.clear( );
+    _coverageSet.clear( );
     for ( uint32_t i = 0; i < setSize; ++i )
     {
         uint32_t sensorType   = start.ReadNtohU32( );
         uint32_t areaCoverage = start.ReadNtohU32( );
-        m_coverageSet.insert( std::make_pair( sensorType, areaCoverage ) );
+        _coverageSet.insert( std::make_pair( sensorType, areaCoverage ) );
     }
     return GetSerializedSize( );
 }
