@@ -1,5 +1,3 @@
-// AdhocNetwork.h
-
 #ifndef ADHOC_NETWORK_H
 #define ADHOC_NETWORK_H
 
@@ -25,9 +23,7 @@
 
 #include "../GossipHeader.h"
 
-using namespace ns3;
-
-// Define a custom hash function for std::pair if not already defined
+// Custom hash for std::pair<uint32_t, uint32_t>
 namespace std
 {
     template <> struct hash<std::pair<uint32_t, uint32_t>>
@@ -40,21 +36,50 @@ class AdhocNetwork
 {
     public:
         AdhocNetwork( uint32_t numNodes,
-                      uint32_t numSensors,
-                      uint32_t numAreas,
+                      std::set<uint32_t> sensorTypes,
+                      std::set<uint32_t> areaTypes,
                       WifiStandard wifiStandard,
                       std::string macType,
                       std::string ipBase,
                       std::string positionAllocator,
                       double communicationRange,
                       double gridX,
-                      double gridY );
+                      double gridY,
+                      std::vector<std::vector<uint32_t>> nodeSensors,
+                      std::vector<uint32_t> nodeAreas );
         ~AdhocNetwork( );
 
+        // Setup and initialization
         void setup( );
+        void initializeRandomPositions( double xMin, double xMax, double yMin, double yMax );
+        void InitializeNodeCoverageSets( );
+
+        // Neighbor discovery and selection
         void findNeighbors( uint32_t nodeId );
         void findNeighborsSubset( uint32_t nodeId );
+        void scheduleFindNeighbors( double interval );
+        void m_findNeighborsCallback( double interval );
 
+        // Packet sending/receiving
+        Ptr<Socket> GetSenderSocket( uint32_t senderId, uint32_t receiverId );
+        void SendPackets( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors );
+        void SendPacketsHelper( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors );
+        void SetupDataReceiver( Ptr<Node> node, uint32_t nodeId );
+        uint32_t GetNodeIdFromIpAddress( Ipv4Address address );
+        void ReceivePacket( Ptr<Socket> socket );
+
+        // Coverage and utility
+        std::pair<uint32_t, uint32_t> SetCoverage( uint32_t nodeId );
+        bool m_isCovered( uint32_t receiverId );
+        double m_calculateUtility( uint32_t senderId, uint32_t receiverId );
+        void updateAggregatedSensors( uint32_t receiverId );
+        void updateAggregatedAreas( uint32_t receiverId );
+        int getMaxCoverage( );
+        uint32_t calculateNumSubNeighbors( uint32_t nodeId );
+        void PrintFinalCoverage( uint32_t nodeId ) const;
+        bool IsCoverageReached( );
+
+        // Getters
         NodeContainer getNodes( ) const { return m_nodes; }
 
         uint32_t getNumNodes( ) const { return m_numNodes; }
@@ -67,54 +92,53 @@ class AdhocNetwork
 
         std::vector<std::vector<Ptr<Node>>> getNeighborsSubset( ) const { return m_neighborsSubset; }
 
-        void scheduleFindNeighbors( double interval );
-        void initializeRandomPositions( double xMin, double xMax, double yMin, double yMax );
-        Ptr<Socket> GetSenderSocket( uint32_t senderId, uint32_t receiverId );
-        void SendPackets( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors );
-        void SendPacketsHelper( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors );
-        void SetupDataReceiver( Ptr<Node> node, uint32_t nodeId );
-        uint32_t GetNodeIdFromIpAddress( Ipv4Address address );
-        void ReceivePacket( Ptr<Socket> socket );
-        void InitializeNodeCoverageSets( );
-        std::pair<uint32_t, uint32_t> SetCoverage( uint32_t nodeId );
-        int getMinCoverage( );
-
     private:
+        // Simulation parameters
         uint32_t m_numNodes;
         uint32_t m_numSensors;
         uint32_t m_numAreas;
         WifiStandard m_wifiStandard;
         std::string m_macType;
         std::string m_ipBase;
-        std::vector<std::vector<Ptr<Node>>> m_neighbors;
-        std::vector<std::vector<Ptr<Node>>> m_neighborsSubset;
-        std::vector<Vector> m_positions;
+        std::string m_positionAllocator;
+        double m_communicationRange;
         double m_gridX;
         double m_gridY;
 
-        std::unordered_map<std::pair<uint32_t, uint32_t>, Ptr<Socket>> m_senderSockets;
-
+        // Node containers and network devices
         NodeContainer m_nodes;
         NetDeviceContainer m_devices;
         Ipv4InterfaceContainer m_interfaces;
 
+        // Mobility and positions
+        std::vector<Vector> m_positions;
+
+        // Neighbors and subsets
+        std::vector<std::vector<Ptr<Node>>> m_neighbors;
+        std::vector<std::vector<Ptr<Node>>> m_neighborsSubset;
+        std::unordered_map<std::pair<uint32_t, uint32_t>, Ptr<Socket>> m_senderSockets;
+
+        // Gossip protocol parameters
         uint32_t m_gossipGroupSize;
-        std::vector<std::set<std::pair<uint32_t, uint32_t>>> m_nodeCoverageSets;
         double m_alpha;
         double m_beta;
         double m_lambda;
-        std::vector<uint32_t> m_dataSizesScaled;
         uint32_t m_maximumDataSize;
+        std::vector<uint32_t> m_dataSizesScaled;
 
-        // Sensor types and intrinsic coverage for each node.
+        // Coverage information
+        std::vector<std::set<std::pair<uint32_t, uint32_t>>> m_nodeCoverageSets;
+        std::vector<uint32_t> m_coverageSteps;
+        std::vector<std::set<uint32_t>> m_receivedPackets;
+        bool m_isCoverageReached;
+
+        // Sensor and area assignments
         std::set<uint32_t> m_sensorTypes;
         std::vector<std::vector<uint32_t>> m_sensorCoverage;
-
-        // Areas and intrinsic coverage for each node.
         std::set<uint32_t> m_areas;
         std::vector<std::vector<uint32_t>> m_areaCoverage;
 
-        // Bitset-based representations.
+        // Bitset representations
         static constexpr size_t MAX_SENSOR_TYPES = 3;
         static constexpr size_t MAX_AREA_TYPES   = 3;
         std::vector<std::bitset<MAX_SENSOR_TYPES>> m_sensorCoverageBitset;
@@ -124,17 +148,9 @@ class AdhocNetwork
         std::vector<std::unordered_map<uint32_t, std::bitset<MAX_SENSOR_TYPES>>> m_neighborSensorBitset;
         std::vector<std::unordered_map<uint32_t, std::bitset<MAX_AREA_TYPES>>> m_neighborAreaBitset;
 
-        std::vector<uint32_t> m_coverageSteps;
-        std::vector<std::set<uint32_t>> m_receivedPackets;
-
-        std::string m_positionAllocator;
-        double m_communicationRange;
-
-        void m_findNeighborsCallback( double interval );
-        bool m_isCovered( uint32_t receiverId );
-        double m_calculateUtility( uint32_t sentId, uint32_t receivedId );
-        void updateAggregatedSensors( uint32_t receiverId );
-        void updateAggregatedAreas( uint32_t receiverId );
+        // Pre-assigned sensor and area assignments per node
+        std::vector<std::vector<uint32_t>> m_assignedSensors;
+        std::vector<uint32_t> m_assignedAreas;
 };
 
 #endif // ADHOC_NETWORK_H

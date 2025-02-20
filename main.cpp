@@ -11,7 +11,7 @@ using namespace ns3;
 #define NUM_NODES           4
 #define NUM_SENSORS         3
 #define NUM_AREAS           3
-#define NUM_RUNS            200
+#define NUM_RUNS            15
 #define COMMUNICATION_RANGE 70.0
 #define MAX_RUN_TIME        100000.0
 #define GRID_X              100.0
@@ -58,38 +58,121 @@ int main( int argc, char* argv[] )
     std::vector<Vector> nodePositions;
     nodePositions.resize( NUM_NODES );
 
+    std::set<uint32_t> sensorTypes;
+    std::set<uint32_t> areaTypes;
+
+    // Initialize sensor types and area IDs
+    for ( uint32_t i = 0; i < NUM_SENSORS; ++i )
+    {
+        sensorTypes.insert( i );
+    }
+    for ( uint32_t i = 0; i < NUM_AREAS; ++i )
+    {
+        areaTypes.insert( i );
+    }
+
+    Ptr<UniformRandomVariable> rngSensors = CreateObject<UniformRandomVariable>( );
+
+    std::vector<std::vector<uint32_t>> nodeToSensors( NUM_NODES );
+    for ( uint32_t nodeIdx = 0; nodeIdx < NUM_NODES; ++nodeIdx )
+    {
+        // pick how many sensors for this node:
+        uint32_t numPossible = ( NUM_SENSORS > 1 ) ? ( NUM_SENSORS - 1 ) : 1;
+        // if NUM_SENSORS=3, then numPossible=2
+        uint32_t howMany = rngSensors->GetInteger( 1, numPossible );
+
+        // We want 'howMany' distinct sensor types from [0..NUM_SENSORS-1]
+        // Let's sample them randomly without replacement:
+        std::vector<uint32_t> allSensors;
+        for ( uint32_t s = 0; s < NUM_SENSORS; s++ )
+        {
+            allSensors.push_back( s );
+        }
+
+        // We'll pick 'howMany' out of the 'allSensors'
+        std::vector<uint32_t> chosenSensors;
+        for ( uint32_t c = 0; c < howMany && !allSensors.empty( ); c++ )
+        {
+            uint32_t idx = rngSensors->GetInteger( 0, allSensors.size( ) - 1 );
+            chosenSensors.push_back( allSensors[idx] );
+            // remove it so we don't pick duplicates
+            allSensors.erase( allSensors.begin( ) + idx );
+        }
+        nodeToSensors[nodeIdx] = chosenSensors;
+    }
+
+    // 2) Round-robin area assignment
+    // This ensures each node has exactly 1 area, reusing areas if #nodes > #areas
+    std::vector<uint32_t> nodeToArea( NUM_NODES );
+    for ( uint32_t nodeIdx = 0; nodeIdx < NUM_NODES; ++nodeIdx )
+    {
+        // pick area in [0..(NUM_AREAS - 1)] but cycle so node0->area0, node1->area1, node2->area2, node3->area0, ...
+        nodeToArea[nodeIdx] = nodeIdx % NUM_AREAS;
+    }
+
     // For each run:
     for ( uint32_t runIndex = 0; runIndex < NUM_RUNS; ++runIndex )
     {
         NS_LOG_INFO( "===== Starting Run #" << runIndex << " =====" );
-        AdhocNetwork
-            adhocNetwork( NUM_NODES, NUM_SENSORS, NUM_AREAS, WIFI_STANDARD_80211a, "ns3::AdhocWifiMac", "10.1.1.0", "ns3::RandomRectanglePositionAllocator", COMMUNICATION_RANGE, GRID_X, GRID_Y );
-        adhocNetwork.setup( );
+        AdhocNetwork adhoc( NUM_NODES,
+                            sensorTypes,
+                            areaTypes,
+                            WIFI_STANDARD_80211a,
+                            "ns3::AdhocWifiMac",
+                            "10.1.1.0",
+                            "ns3::RandomRectanglePositionAllocator",
+                            COMMUNICATION_RANGE,
+                            GRID_X,
+                            GRID_Y,
+                            nodeToSensors,
+                            nodeToArea );
+        adhoc.setup( );
 
-        if ( runIndex > 0 )
+        // if ( runIndex > 0 )
+        // {
+        //     for ( uint32_t i = 0; i < NUM_NODES; ++i )
+        //     {
+        //         Ptr<Node> node         = adhocNetwork.getNodes( ).Get( i );
+        //         Ptr<MobilityModel> mob = node->GetObject<MobilityModel>( );
+        //         mob->SetPosition( nodePositions[i] );
+        //     }
+        // }
+
+        // for ( uint32_t i = 0; i < adhocNetwork.getNodes( ).GetN( ); ++i )
+        // {
+        //     Ptr<Node> node         = adhocNetwork.getNodes( ).Get( i );
+        //     Ptr<MobilityModel> mob = node->GetObject<MobilityModel>( );
+        //     Vector pos             = mob->GetPosition( );
+        //     NS_LOG_INFO( "After setup/shift: Node " << i << " position: " << pos );
+        // }
+
+        // Schedule events for this step
+        ScheduleStep( adhoc );
+
+        if ( Simulator::IsFinished( ) && !adhoc.IsCoverageReached( ) )
         {
+            NS_LOG_INFO( "IsFinished" );
+
+            // For each node, schedule neighbor discovery, subset selection, etc.
             for ( uint32_t i = 0; i < NUM_NODES; ++i )
             {
-                Ptr<Node> node         = adhocNetwork.getNodes( ).Get( i );
-                Ptr<MobilityModel> mob = node->GetObject<MobilityModel>( );
-                mob->SetPosition( nodePositions[i] );
+                // Subset selection at startTime + 1.0
+                Simulator::Schedule( Seconds( 1.0 ), &AdhocNetwork::findNeighborsSubset, &adhoc, i );
+
+                // Packet sending at startTime + 2.0
+                Simulator::Schedule( Seconds( 2.0 ), [&, i]( ) {
+                    auto neighborsSubset = adhoc.getNeighborsSubset( ).at( i );
+                    if ( !neighborsSubset.empty( ) )
+                    {
+                        adhoc.SendPacketsHelper( adhoc.getNodes( ).Get( i ), i, neighborsSubset );
+                    }
+                } );
             }
         }
 
-        for ( uint32_t i = 0; i < adhocNetwork.getNodes( ).GetN( ); ++i )
-        {
-            Ptr<Node> node         = adhocNetwork.getNodes( ).Get( i );
-            Ptr<MobilityModel> mob = node->GetObject<MobilityModel>( );
-            Vector pos             = mob->GetPosition( );
-            NS_LOG_INFO( "After setup/shift: Node " << i << " position: " << pos );
-        }
-
-        // Schedule events for this step
-        ScheduleStep( adhocNetwork );
-
         // Now let the sim run from currentEndTime to currentEndTime+phaseDuration
         // Simulator::Stop( Seconds( currentEndTime + RUN_DURATION ) );
-        Simulator::Stop( Seconds( MAX_RUN_TIME ) );
+        // Simulator::Stop( Seconds( MAX_RUN_TIME ) );
         Simulator::Run( );
 
         // after returning from Run():
@@ -101,28 +184,30 @@ int main( int argc, char* argv[] )
 
         // End of this step
         // Retrieve coverage steps from adhocNetwork, store them, etc.
-        int coverageSteps = adhocNetwork.getMinCoverage( );
-        if ( coverageSteps > 0 )
+        int coverageSteps = adhoc.getMaxCoverage( );
+        if ( adhoc.IsCoverageReached( ) )
         {
             convergenceStepsVec.push_back( coverageSteps );
             NS_LOG_INFO( "Run " << runIndex << " coverage steps: " << coverageSteps );
         }
 
         // Shift node positions for this step
-        ShiftNodePositions( adhocNetwork, runIndex );
+        // ShiftNodePositions( adhocNetwork, runIndex );
 
-        for ( uint32_t i = 0; i < NUM_NODES; ++i )
-        {
-            Ptr<Node> node         = adhocNetwork.getNodes( ).Get( i );
-            Ptr<MobilityModel> mob = node->GetObject<MobilityModel>( );
-            nodePositions[i]       = mob->GetPosition( ); // capture final positions
-        }
+        // for ( uint32_t i = 0; i < NUM_NODES; ++i )
+        // {
+        //     Ptr<Node> node         = adhocNetwork.getNodes( ).Get( i );
+        //     Ptr<MobilityModel> mob = node->GetObject<MobilityModel>( );
+        //     nodePositions[i]       = mob->GetPosition( ); // capture final positions
+        // }
 
         // Reset the simulator (this resets the event queue and simulation time, but not the node state)
         Simulator::Destroy( );
 
         NS_LOG_INFO( "===== Completed Run #" << runIndex << " =====" );
     }
+
+    NS_LOG_INFO( "Number of runs counted in convergenceStepsVec: " << convergenceStepsVec.size( ) );
 
     double meanConvergenceSteps = std::accumulate( convergenceStepsVec.begin( ), convergenceStepsVec.end( ), 0.0 ) / convergenceStepsVec.size( );
     NS_LOG_INFO( "Mean convergence steps: " << meanConvergenceSteps );
@@ -138,7 +223,6 @@ int main( int argc, char* argv[] )
 
 void ScheduleStep( AdhocNetwork& adhocNetwork )
 {
-
     // For each node, schedule neighbor discovery, subset selection, etc.
     for ( uint32_t i = 0; i < NUM_NODES; ++i )
     {

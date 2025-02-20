@@ -1,7 +1,6 @@
 // AdhocNetwork.cpp
 
 #include "AdhocNetwork.h"
-#include <algorithm>
 
 NS_LOG_COMPONENT_DEFINE( "AdhocNetwork" );
 
@@ -9,25 +8,29 @@ NS_LOG_COMPONENT_DEFINE( "AdhocNetwork" );
 // Constructor
 //
 AdhocNetwork::AdhocNetwork( uint32_t numNodes,
-                            uint32_t numSensors,
-                            uint32_t numAreas,
+                            std::set<uint32_t> sensorTypes,
+                            std::set<uint32_t> areaTypes,
                             WifiStandard wifiStandard,
                             std::string macType,
                             std::string ipBase,
                             std::string positionAllocator,
                             double communicationRange,
                             double gridX,
-                            double gridY )
+                            double gridY,
+                            std::vector<std::vector<uint32_t>> nodeSensors,
+                            std::vector<uint32_t> nodeAreas )
     : m_numNodes( numNodes ),
-      m_numSensors( numSensors ),
-      m_numAreas( numAreas ),
+      m_sensorTypes( sensorTypes ),
+      m_areas( areaTypes ),
       m_wifiStandard( wifiStandard ),
       m_macType( macType ),
       m_ipBase( ipBase ),
       m_positionAllocator( positionAllocator ),
       m_communicationRange( communicationRange ),
       m_gridX( gridX ),
-      m_gridY( gridY )
+      m_gridY( gridY ),
+      m_assignedSensors( nodeSensors ),
+      m_assignedAreas( nodeAreas )
 {
     NS_LOG_INFO( "Creating AdhocNetwork with " << numNodes << " nodes" );
     // Resize existing containers
@@ -42,21 +45,12 @@ AdhocNetwork::AdhocNetwork( uint32_t numNodes,
     m_coverageSteps.resize( numNodes );
 
     // Default parameters
-    m_gossipGroupSize = 3;
-    m_alpha           = 0.5;
-    m_beta            = 0.5;
-    m_lambda          = 1.0;
-    m_maximumDataSize = 2048;
-
-    // Initialize sensor types and area IDs
-    for ( uint32_t i = 0; i < numSensors; ++i )
-    {
-        m_sensorTypes.insert( i );
-    }
-    for ( uint32_t i = 0; i < numAreas; ++i )
-    {
-        m_areas.insert( i );
-    }
+    m_gossipGroupSize   = 3;
+    m_alpha             = 2;
+    m_beta              = 2;
+    m_lambda            = 0.5;
+    m_maximumDataSize   = 32;
+    m_isCoverageReached = false;
 
     // Resize new bitset containers
     m_sensorCoverageBitset.resize( numNodes );
@@ -149,9 +143,9 @@ void AdhocNetwork::setup( )
     m_interfaces = ipv4.Assign( m_devices );
     NS_LOG_INFO( "IPv4 addresses assigned" );
 
-    NS_LOG_INFO( "Enabling pcap" );
-    wifiPhy.EnablePcapAll( "server-debug", false );
-    NS_LOG_INFO( "Pcap enabled" );
+    // NS_LOG_INFO( "Enabling pcap" );
+    // wifiPhy.EnablePcapAll( "server-debug", false );
+    // NS_LOG_INFO( "Pcap enabled" );
 
     NS_LOG_INFO( "Setting up data receivers" );
     for ( uint32_t i = 0; i < m_nodes.GetN( ); ++i )
@@ -326,9 +320,10 @@ void AdhocNetwork::SendPackets( Ptr<Node> senderNode, uint32_t senderId, std::ve
                 NS_LOG_ERROR( "senderSocket is null in scheduled lambda for Node " << senderId );
                 return;
             }
-            Ptr<Packet> packet = Create<Packet>( 1024 );
+            Ptr<Packet> packet = Create<Packet>( );
             GossipHeader gossipHeader( senderId, coverageSet, dataSize );
             packet->AddHeader( gossipHeader );
+            NS_LOG_INFO( "Packet size: " << packet->GetSize( ) );
             m_dataSizesScaled[senderId] = ( static_cast<double>( packet->GetSize( ) ) / m_maximumDataSize ) * ( m_sensorTypes.size( ) + m_areas.size( ) );
             if ( senderSocket->Send( packet ) == -1 )
             {
@@ -403,14 +398,17 @@ void AdhocNetwork::ReceivePacket( Ptr<Socket> socket )
         GossipHeader gossipHeader;
         packet->RemoveHeader( gossipHeader );
 
+        // Check if the node has received all packets from its neighbors to reset Gossip propagation.
+        if ( m_receivedPackets[receiverId].size( ) == calculateNumSubNeighbors( receiverId ) )
+        {
+            NS_LOG_INFO( "Node " << receiverId << " has received all packets, resetting received packets" );
+            m_receivedPackets[receiverId].clear( );
+        }
+
         // Avoid processing duplicate packets.
         if ( m_receivedPackets[receiverId].find( gossipHeader.GetOriginNodeId( ) ) == m_receivedPackets[receiverId].end( ) )
         {
             m_receivedPackets[receiverId].insert( gossipHeader.GetOriginNodeId( ) );
-
-            // Merge coverage sets if desired.
-            std::set<std::pair<uint32_t, uint32_t>> updatedCoverageSet = gossipHeader.GetCoverageSet( );
-            updatedCoverageSet.insert( m_nodeCoverageSets[receiverId].begin( ), m_nodeCoverageSets[receiverId].end( ) );
 
             // Calculate Utility using the bitset–based method.
             double utility = m_calculateUtility( senderId, receiverId );
@@ -418,11 +416,11 @@ void AdhocNetwork::ReceivePacket( Ptr<Socket> socket )
 
             if ( utility > 0 )
             {
-                // Instead of updating the old per-neighbor vector view, now update the aggregated bitset.
+                // Update the aggregated bitset.
                 m_aggregatedSensorsBitset[receiverId] |= m_sensorCoverageBitset[senderId];
                 m_aggregatedAreasBitset[receiverId] |= m_areaCoverageBitset[senderId];
 
-                // And record the neighbor's bitset for future recomputation.
+                // Record the neighbor's bitset for future recomputation.
                 std::bitset<MAX_SENSOR_TYPES> neighborSensorBitset;
                 neighborSensorBitset.reset( );
                 for ( uint32_t sensor : m_sensorCoverage[senderId] )
@@ -451,21 +449,37 @@ void AdhocNetwork::ReceivePacket( Ptr<Socket> socket )
 
             double ownUtility = m_calculateUtility( receiverId, receiverId );
             NS_LOG_INFO( "Receiver Utility of Node " << receiverId << ": " << ownUtility );
+            if ( ownUtility < 0 )
+            {
+                m_neighborSensorBitset[receiverId].erase( receiverId );
+                m_neighborAreaBitset[receiverId].erase( receiverId );
+                updateAggregatedSensors( receiverId );
+                updateAggregatedAreas( receiverId );
+            }
 
             m_coverageSteps[receiverId]++;
 
-            if ( !m_isCovered( receiverId ) )
+            if ( !m_isCovered( receiverId ) || Simulator::IsFinished( ) )
             {
                 NS_LOG_INFO( "Node " << receiverId << " does not cover, finding neighbors subset and sending packets" );
-                findNeighborsSubset( receiverId );
-                SendPackets( m_nodes.Get( receiverId ), receiverId, m_neighborsSubset[receiverId] );
+                Simulator::Schedule( Simulator::Now( ) + Seconds( 1.0 ), &AdhocNetwork::findNeighborsSubset, this, receiverId );
+                Simulator::Schedule( Simulator::Now( ) + Seconds( 2.0 ), &AdhocNetwork::SendPackets, this, m_nodes.Get( receiverId ), receiverId, m_neighborsSubset[receiverId] );
             }
             else
             {
                 NS_LOG_INFO( "Node " << receiverId << " covers" );
                 NS_LOG_INFO( "Coverage Steps: " << m_coverageSteps[receiverId] );
+
+                // Now print the final coverage:
+                PrintFinalCoverage( receiverId );
+                m_isCoverageReached = true;
+
                 Simulator::Stop( Seconds( Simulator::Now( ).GetSeconds( ) ) );
             }
+        }
+        else
+        {
+            NS_LOG_INFO( "Node " << receiverId << " received duplicate packet from Node " << senderId );
         }
     }
 }
@@ -475,53 +489,46 @@ void AdhocNetwork::ReceivePacket( Ptr<Socket> socket )
 //
 void AdhocNetwork::InitializeNodeCoverageSets( )
 {
-    Ptr<UniformRandomVariable> sensorTypeRv = CreateObject<UniformRandomVariable>( );
-    Ptr<UniformRandomVariable> areaRv       = CreateObject<UniformRandomVariable>( );
-    Ptr<UniformRandomVariable> numSensorsRv = CreateObject<UniformRandomVariable>( );
-    Ptr<UniformRandomVariable> numAreasRv   = CreateObject<UniformRandomVariable>( );
-
-    m_nodeCoverageSets.resize( m_numNodes );
+    // For safety if you do multiple runs or re-setup, clear old coverage first
     for ( uint32_t i = 0; i < m_numNodes; ++i )
     {
-        uint32_t numSensors = numSensorsRv->GetInteger( 1, 3 );
-        uint32_t numAreas   = numAreasRv->GetInteger( 1, 3 );
-        std::vector<uint32_t> availableSensors( m_sensorTypes.begin( ), m_sensorTypes.end( ) );
-        std::vector<uint32_t> availableAreas( m_areas.begin( ), m_areas.end( ) );
-        Ptr<UniformRandomVariable> randomVar = CreateObject<UniformRandomVariable>( );
+        m_sensorCoverage[i].clear( );
+        m_areaCoverage[i].clear( );
+        m_sensorCoverageBitset[i].reset( );
+        m_areaCoverageBitset[i].reset( );
+        m_aggregatedSensorsBitset[i].reset( );
+        m_aggregatedAreasBitset[i].reset( );
+    }
 
-        // Assign sensors to node i.
-        for ( uint32_t j = 0; j < numSensors && !availableSensors.empty( ); ++j )
+    // Now fill them from the user-provided assignments
+    for ( uint32_t i = 0; i < m_numNodes; ++i )
+    {
+        // 1) Sensors
+        for ( uint32_t sensorType : m_assignedSensors[i] )
         {
-            uint32_t sensorIndex = randomVar->GetInteger( 0, availableSensors.size( ) - 1 );
-            uint32_t sensorType  = availableSensors[sensorIndex];
-            availableSensors.erase( availableSensors.begin( ) + sensorIndex );
-            m_sensorCoverage[i].emplace_back( sensorType );
+            m_sensorCoverage[i].push_back( sensorType );
             m_sensorCoverageBitset[i].set( sensorType, true );
             m_aggregatedSensorsBitset[i].set( sensorType, true );
         }
-        // Assign areas to node i.
-        for ( uint32_t k = 0; k < numAreas && !availableAreas.empty( ); ++k )
-        {
-            uint32_t areaIndex = randomVar->GetInteger( 0, availableAreas.size( ) - 1 );
-            uint32_t area      = availableAreas[areaIndex];
-            availableAreas.erase( availableAreas.begin( ) + areaIndex );
-            m_areaCoverage[i].emplace_back( area );
-            m_areaCoverageBitset[i].set( area, true );
-            m_aggregatedAreasBitset[i].set( area, true );
-        }
-        // Build the intrinsic coverage set.
+
+        // 2) Exactly one area for each node in round-robin
+        // (the user already assigned it in nodeAreas)
+        uint32_t area = m_assignedAreas[i];
+        m_areaCoverage[i].push_back( area );
+        m_areaCoverageBitset[i].set( area, true );
+        m_aggregatedAreasBitset[i].set( area, true );
+
+        // Build the intrinsic coverage set
         std::set<std::pair<uint32_t, uint32_t>> coverageSet;
-        for ( const auto& sensor : m_sensorCoverage[i] )
+        for ( uint32_t sensor : m_sensorCoverage[i] )
         {
-            for ( const auto& area : m_areaCoverage[i] )
-            {
-                coverageSet.insert( std::make_pair( sensor, area ) );
-            }
+            // node has exactly 1 area in the assigned array
+            coverageSet.insert( { sensor, area } );
         }
         m_nodeCoverageSets[i] = coverageSet;
 
         NS_LOG_INFO( "Node " << i << " coverage set:" );
-        for ( const auto& pair : coverageSet )
+        for ( auto& pair : coverageSet )
         {
             NS_LOG_INFO( "  (" << pair.first << ", " << pair.second << ")" );
         }
@@ -552,17 +559,20 @@ double AdhocNetwork::m_calculateUtility( uint32_t senderId, uint32_t receiverId 
 {
     std::bitset<MAX_SENSOR_TYPES> newSensorBits = m_sensorCoverageBitset[senderId] & ~( m_aggregatedSensorsBitset[receiverId] );
     int newSensors                              = newSensorBits.count( );
-    std::bitset<MAX_AREA_TYPES> newAreaBits     = m_areaCoverageBitset[senderId] & ~( m_aggregatedAreasBitset[receiverId] );
-    int newAreas                                = newAreaBits.count( );
+    NS_LOG_INFO( "New sensors: " << newSensors );
+    std::bitset<MAX_AREA_TYPES> newAreaBits = m_areaCoverageBitset[senderId] & ~( m_aggregatedAreasBitset[receiverId] );
+    int newAreas                            = newAreaBits.count( );
+    NS_LOG_INFO( "New areas: " << newAreas );
+
     return m_alpha * newSensors + m_beta * newAreas - m_lambda * m_dataSizesScaled[senderId];
 }
 
 //
 // getMinCoverage: return the minimum number of coverage steps among nodes.
 //
-int AdhocNetwork::getMinCoverage( )
+int AdhocNetwork::getMaxCoverage( )
 {
-    int minSteps          = std::numeric_limits<int>::max( );
+    int maxSteps          = std::numeric_limits<int>::min( );
     bool foundAnyPositive = false;
     for ( uint32_t i = 0; i < m_numNodes; i++ )
     {
@@ -570,8 +580,8 @@ int AdhocNetwork::getMinCoverage( )
         if ( steps > 0 )
         {
             foundAnyPositive = true;
-            if ( steps < minSteps )
-                minSteps = steps;
+            if ( steps > maxSteps )
+                maxSteps = steps;
         }
     }
     if ( !foundAnyPositive )
@@ -579,7 +589,7 @@ int AdhocNetwork::getMinCoverage( )
         NS_LOG_WARN( "No node had a positive coverageSteps! All zero or never covered?" );
         return 0;
     }
-    return minSteps;
+    return maxSteps;
 }
 
 //
@@ -609,3 +619,54 @@ void AdhocNetwork::updateAggregatedAreas( uint32_t receiverId )
     }
     m_aggregatedAreasBitset[receiverId] = aggregated;
 }
+
+void AdhocNetwork::PrintFinalCoverage( uint32_t nodeId ) const
+{
+    // Convert the aggregatedSensorsBitset[nodeId] to a list of sensor IDs:
+    std::vector<uint32_t> coveredSensors;
+    for ( size_t s = 0; s < MAX_SENSOR_TYPES; s++ )
+    {
+        if ( m_aggregatedSensorsBitset[nodeId].test( s ) )
+        {
+            coveredSensors.push_back( static_cast<uint32_t>( s ) );
+        }
+    }
+
+    // Convert the aggregatedAreasBitset[nodeId] to a list of area IDs:
+    std::vector<uint32_t> coveredAreas;
+    for ( size_t a = 0; a < MAX_AREA_TYPES; a++ )
+    {
+        if ( m_aggregatedAreasBitset[nodeId].test( a ) )
+        {
+            coveredAreas.push_back( static_cast<uint32_t>( a ) );
+        }
+    }
+
+    NS_LOG_INFO( "=== Final Coverage for Node " << nodeId << " ===" );
+    NS_LOG_INFO( "Sensors covered: " );
+    for ( auto s : coveredSensors )
+    {
+        NS_LOG_INFO( "  Sensor ID: " << s );
+    }
+    NS_LOG_INFO( "Areas covered: " );
+    for ( auto a : coveredAreas )
+    {
+        NS_LOG_INFO( "  Area ID: " << a );
+    }
+}
+
+uint32_t AdhocNetwork::calculateNumSubNeighbors( uint32_t nodeId )
+{
+    uint32_t numSubNeighbors = 0;
+    for ( uint32_t i = 0; i < m_nodes.GetN( ); ++i )
+    {
+        for ( int j = 0; j < m_neighborsSubset[i].size( ); ++j )
+        {
+            if ( m_neighborsSubset[i][j]->GetId( ) == nodeId )
+                numSubNeighbors++;
+        }
+    }
+    return numSubNeighbors;
+}
+
+bool AdhocNetwork::IsCoverageReached( ) { return m_isCoverageReached; }
