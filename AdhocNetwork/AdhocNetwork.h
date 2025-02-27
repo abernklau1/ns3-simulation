@@ -258,15 +258,6 @@ class AdhocNetwork
         void updateAggregatedAreas( uint32_t receiverId );
 
         /**
-         * @brief Returns the maximum number of coverage steps achieved among all nodes.
-         *
-         * This represents the "depth" of gossip propagation.
-         *
-         * @return The maximum coverage steps.
-         */
-        int getMaxCoverage( );
-
-        /**
          * @brief Calculates how many neighbor subsets include the given node.
          *
          * This is used for tracking how many distinct packets a node should receive.
@@ -332,6 +323,12 @@ class AdhocNetwork
          */
         std::vector<std::vector<Ptr<Node>>> getNeighborsSubset( ) const { return _neighborsSubset; }
 
+        /**
+         * @brief Returns the number of steps it took to discover a covering set
+         * @return An unsigned 32 bit integer containing the number of steps to coverage
+         */
+        uint32_t getCoverageSteps( ) const { return _coveredSteps; }
+
     private:
         //===========================================================================
         // Simulation Parameters
@@ -384,6 +381,7 @@ class AdhocNetwork
         std::vector<uint32_t> _coverageSteps;                                   // Number of times each node has updated its coverage view
         std::vector<std::set<uint32_t>> _receivedPackets;                       // Tracker for received (unique) packet IDs per node
         bool _isCoverageReached;                                                // Flag indicating if full coverage has been reached by any node
+        uint32_t _coveredSteps;                                                 // Number of steps it took to converge for this simulation
 
         //===========================================================================
         // Sensor and Area Assignments

@@ -33,6 +33,7 @@ AdhocNetwork::AdhocNetwork( uint32_t numNodes,
       _assignedAreas( nodeAreas )
 {
     NS_LOG_INFO( "Creating AdhocNetwork with " << numNodes << " nodes" );
+
     // Resize existing containers
     _neighbors.resize( numNodes );
     _positions.resize( numNodes );
@@ -46,11 +47,12 @@ AdhocNetwork::AdhocNetwork( uint32_t numNodes,
 
     // Default parameters
     _gossipGroupSize   = 3;
-    _alpha             = 2;
-    _beta              = 2;
-    _lambda            = 0.5;
-    _maximumDataSize   = 32;
+    _alpha             = 0.5;
+    _beta              = 0.5;
+    _lambda            = 1;
+    _maximumDataSize   = 2048;
     _isCoverageReached = false;
+    _coveredSteps      = 0;
 
     // Resize new bitset containers
     _sensorCoverageBitset.resize( numNodes );
@@ -189,7 +191,7 @@ void AdhocNetwork::initializeRandomPositions( double xMin, double xMax, double y
 //
 void AdhocNetwork::initializeNodeCoverageSets( )
 {
-    // For safety if you do multiple runs or re-setup, clear old coverage first
+    // Clear old sensor and area coverage data for all nodes.
     for ( uint32_t i = 0; i < _numNodes; ++i )
     {
         _sensorCoverage[i].clear( );
@@ -200,10 +202,10 @@ void AdhocNetwork::initializeNodeCoverageSets( )
         _aggregatedAreasBitset[i].reset( );
     }
 
-    // Now fill them from the user-provided assignments
+    // For each node, use the pre-assigned sensors and area as provided.
     for ( uint32_t i = 0; i < _numNodes; ++i )
     {
-        // 1) Sensors
+        // Set up the intrinsic sensor coverage for node i using _assignedSensors.
         for ( uint32_t sensorType : _assignedSensors[i] )
         {
             _sensorCoverage[i].push_back( sensorType );
@@ -211,18 +213,16 @@ void AdhocNetwork::initializeNodeCoverageSets( )
             _aggregatedSensorsBitset[i].set( sensorType, true );
         }
 
-        // 2) Exactly one area for each node in round-robin
-        // (the user already assigned it in nodeAreas)
+        // For the area assignment, use the pre-assigned area (exactly one per node).
         uint32_t area = _assignedAreas[i];
         _areaCoverage[i].push_back( area );
         _areaCoverageBitset[i].set( area, true );
         _aggregatedAreasBitset[i].set( area, true );
 
-        // Build the intrinsic coverage set
+        // Build the intrinsic coverage set as sensor-area pairs.
         std::set<std::pair<uint32_t, uint32_t>> coverageSet;
         for ( uint32_t sensor : _sensorCoverage[i] )
         {
-            // node has exactly 1 area in the assigned array
             coverageSet.insert( { sensor, area } );
         }
         _nodeCoverageSets[i] = coverageSet;
@@ -387,7 +387,7 @@ void AdhocNetwork::sendPackets( Ptr<Node> senderNode, uint32_t senderId, std::ve
             GossipHeader gossipHeader( senderId, coverageSet, dataSize );
             packet->AddHeader( gossipHeader );
             NS_LOG_INFO( "Packet size: " << packet->GetSize( ) );
-            _dataSizesScaled[senderId] = ( static_cast<double>( packet->GetSize( ) ) / _maximumDataSize ) * ( _sensorTypes.size( ) + _areas.size( ) );
+            _dataSizesScaled[senderId] = ( static_cast<double>( packet->GetSize( ) ) / _maximumDataSize ) * ( _assignedSensors[senderId].size( ) + 1 /* Initial area covered by the node */ );
             if ( senderSocket->Send( packet ) == -1 )
             {
                 NS_LOG_ERROR( "Failed to send packet from Node " << senderId << " to Node " << receiverId );
@@ -532,6 +532,7 @@ void AdhocNetwork::receivePacket( Ptr<Socket> socket )
             {
                 NS_LOG_INFO( "Node " << receiverId << " covers" );
                 NS_LOG_INFO( "Coverage Steps: " << _coverageSteps[receiverId] );
+                _coveredSteps = _coverageSteps[receiverId];
 
                 // Now print the final coverage:
                 printFinalCoverage( receiverId );
@@ -609,31 +610,6 @@ void AdhocNetwork::updateAggregatedAreas( uint32_t receiverId )
         aggregated |= pair.second;
     }
     _aggregatedAreasBitset[receiverId] = aggregated;
-}
-
-//
-// getMinCoverage: return the minimum number of coverage steps among nodes.
-//
-int AdhocNetwork::getMaxCoverage( )
-{
-    int maxSteps          = std::numeric_limits<int>::min( );
-    bool foundAnyPositive = false;
-    for ( uint32_t i = 0; i < _numNodes; i++ )
-    {
-        int steps = _coverageSteps[i];
-        if ( steps > 0 )
-        {
-            foundAnyPositive = true;
-            if ( steps > maxSteps )
-                maxSteps = steps;
-        }
-    }
-    if ( !foundAnyPositive )
-    {
-        NS_LOG_WARN( "No node had a positive coverageSteps! All zero or never covered?" );
-        return 0;
-    }
-    return maxSteps;
 }
 
 uint32_t AdhocNetwork::calculateNumSubNeighbors( uint32_t nodeId )

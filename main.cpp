@@ -11,11 +11,11 @@ using namespace ns3;
 #define NUM_NODES           4
 #define NUM_SENSORS         3
 #define NUM_AREAS           3
-#define NUM_RUNS            15
-#define COMMUNICATION_RANGE 70.0
-#define MAX_RUN_TIME        100000.0
-#define GRID_X              100.0
-#define GRID_Y              100.0
+#define NUM_RUNS            1
+#define COMMUNICATION_RANGE 25
+#define MAX_RUN_TIME        100000000000.0
+#define GRID_X              50.0
+#define GRID_Y              50.0
 
 NS_LOG_COMPONENT_DEFINE( "MainSimulation" );
 
@@ -60,6 +60,38 @@ int main( int argc, char* argv[] )
 
     // Store final node positions between runs if needed.
     std::vector<Vector> nodePositions( NUM_NODES );
+    bool positionsFileExists = false;
+
+    // Check if the positions file exists and has the positions
+    std::ifstream posFileIn( "node_positions.txt" );
+    if ( posFileIn.good( ) )
+    {
+        NS_LOG_INFO( "Reading node positions from file." );
+        for ( uint32_t i = 0; i < NUM_NODES; ++i )
+        {
+            double x, y;
+            if ( posFileIn >> x >> y )
+            {
+                nodePositions[i] = Vector( x, y, 0.0 );
+            }
+            else
+            {
+                NS_LOG_WARN( "Not enough positions in file; using random positions." );
+                positionsFileExists = false;
+                break;
+            }
+        }
+        // Only mark positions as valid if we successfully read all of them.
+        if ( posFileIn.eof( ) || posFileIn.good( ) )
+        {
+            positionsFileExists = true;
+        }
+        posFileIn.close( );
+    }
+    else
+    {
+        NS_LOG_INFO( "Node positions file not found; will use random positions." );
+    }
 
     // Initialize sensor types and area IDs.
     std::set<uint32_t> sensorTypes;
@@ -97,11 +129,11 @@ int main( int argc, char* argv[] )
         nodeToSensors[nodeIdx] = chosenSensors;
     }
 
-    // Round-robin area assignment: each node gets one area (cycling through available areas)
+    Ptr<UniformRandomVariable> rngArea = CreateObject<UniformRandomVariable>( );
     std::vector<uint32_t> nodeToArea( NUM_NODES );
     for ( uint32_t nodeIdx = 0; nodeIdx < NUM_NODES; ++nodeIdx )
     {
-        nodeToArea[nodeIdx] = nodeIdx % NUM_AREAS;
+        nodeToArea[nodeIdx] = rngArea->GetInteger( 0, NUM_AREAS - 1 );
     }
 
     // Run the simulation for each run.
@@ -123,13 +155,17 @@ int main( int argc, char* argv[] )
                             nodeToArea );
         adhoc.setup( );
 
-        // (Optional: reset positions between runs)
-        // for (uint32_t i = 0; i < NUM_NODES; ++i)
-        // {
-        //     Ptr<Node> node = adhoc.getNodes().Get(i);
-        //     Ptr<MobilityModel> mob = node->GetObject<MobilityModel>();
-        //     mob->SetPosition(nodePositions[i]);
-        // }
+        // If the positions file exists, then override the randomly assigned positions.
+        if ( positionsFileExists )
+        {
+            NS_LOG_INFO( "Assigning stored node positions to nodes." );
+            for ( uint32_t i = 0; i < NUM_NODES; ++i )
+            {
+                Ptr<Node> node         = adhoc.getNodes( ).Get( i );
+                Ptr<MobilityModel> mob = node->GetObject<MobilityModel>( );
+                mob->SetPosition( nodePositions[i] );
+            }
+        }
 
         // Schedule initial events (neighbor discovery, subset selection, packet sending)
         ScheduleStep( adhoc );
@@ -144,20 +180,39 @@ int main( int argc, char* argv[] )
         }
 
         // Record coverage steps if coverage was reached.
-        int coverageSteps = adhoc.getMaxCoverage( );
+        int coverageSteps = adhoc.getCoverageSteps( );
         if ( adhoc.isCoverageReached( ) )
         {
             convergenceStepsVec.push_back( coverageSteps );
             NS_LOG_INFO( "Run " << runIndex << " coverage steps: " << coverageSteps );
         }
 
-        // Optionally store final positions.
-        // for (uint32_t i = 0; i < NUM_NODES; ++i)
-        // {
-        //     Ptr<Node> node = adhoc.getNodes().Get(i);
-        //     Ptr<MobilityModel> mob = node->GetObject<MobilityModel>();
-        //     nodePositions[i] = mob->GetPosition();
-        // }
+        // If the positions file did not exist (first run), store the positions.
+        if ( !positionsFileExists )
+        {
+            NS_LOG_INFO( "Storing node positions to file." );
+            for ( uint32_t i = 0; i < NUM_NODES; ++i )
+            {
+                Ptr<Node> node         = adhoc.getNodes( ).Get( i );
+                Ptr<MobilityModel> mob = node->GetObject<MobilityModel>( );
+                nodePositions[i]       = mob->GetPosition( );
+            }
+            std::ofstream posFileOut( "node_positions.txt", std::ios::out );
+            if ( posFileOut.is_open( ) )
+            {
+                for ( uint32_t i = 0; i < NUM_NODES; ++i )
+                {
+                    posFileOut << nodePositions[i].x << " " << nodePositions[i].y << "\n";
+                }
+                posFileOut.close( );
+                // Mark positions as stored so subsequent runs will use them.
+                positionsFileExists = true;
+            }
+            else
+            {
+                NS_LOG_ERROR( "Failed to open node_positions.txt for writing." );
+            }
+        }
 
         Simulator::Destroy( );
         NS_LOG_INFO( "===== Completed Run #" << runIndex << " =====" );
@@ -172,6 +227,54 @@ int main( int argc, char* argv[] )
                                                                 [meanConvergenceSteps]( double sum, int steps ) { return sum + std::pow( steps - meanConvergenceSteps, 2 ); } ) /
                                                convergenceStepsVec.size( ) );
     NS_LOG_INFO( "Standard deviation of convergence steps: " << stdDevConvergenceSteps );
+
+    // ============ (1) APPEND mean & std TO FILE ==============
+    {
+        std::ofstream outFile( "convergence_results.txt", std::ios::app );
+        // Write mean and std to one line, space-separated
+        outFile << meanConvergenceSteps << " " << stdDevConvergenceSteps << "\n";
+    } // outFile closes automatically here
+
+    // ============ (2) REOPEN AND PARSE LINES ==============
+    {
+        std::ifstream inFile( "convergence_results.txt" );
+        std::vector<double> means;
+        std::vector<double> stds;
+
+        if ( inFile.is_open( ) )
+        {
+            double m, s;
+            while ( inFile >> m >> s )
+            {
+                means.push_back( m );
+                stds.push_back( s );
+            }
+            inFile.close( );
+        }
+
+        // ============ (3) IF EXACTLY 10 ENTRIES, COMPUTE AGGREGATE MEAN & STD ==============
+        if ( means.size( ) == 10 )
+        {
+            // Mean of the 10 means
+            double sumM        = std::accumulate( means.begin( ), means.end( ), 0.0 );
+            double meanOfMeans = sumM / 10.0;
+
+            // Mean of the 10 stds
+            double sumS       = std::accumulate( stds.begin( ), stds.end( ), 0.0 );
+            double meanOfStds = sumS / 10.0;
+
+            // Print out or log
+            std::cout << "\nAfter collecting 10 lines total:\n";
+            std::cout << "Mean of the 10 means = " << meanOfMeans << "\n";
+            std::cout << "Mean of the 10 stds  = " << meanOfStds << "\n\n";
+
+            // Optionally append to the file as well:
+            {
+                std::ofstream outFile( "convergence_results.txt", std::ios::app );
+                outFile << meanOfMeans << " " << meanOfStds << "\n";
+            }
+        }
+    }
 
     return 0;
 }
