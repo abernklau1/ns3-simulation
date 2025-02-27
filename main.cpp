@@ -1,6 +1,8 @@
 #include "AdhocNetwork/AdhocNetwork.h"
 #include "ns3/command-line.h"
 #include "ns3/log.h"
+#include <filesystem>
+namespace fs = std::filesystem;
 
 #ifndef NS3_LOG_ENABLE
     #define NS3_LOG_ENABLE 1
@@ -11,7 +13,7 @@ using namespace ns3;
 #define NUM_NODES           4
 #define NUM_SENSORS         3
 #define NUM_AREAS           3
-#define NUM_RUNS            1
+#define NUM_RUNS            15
 #define COMMUNICATION_RANGE 25
 #define MAX_RUN_TIME        100000000000.0
 #define GRID_X              50.0
@@ -47,6 +49,13 @@ void ShiftNodePositions( AdhocNetwork& adhoc, uint32_t runIndex );
 
 int main( int argc, char* argv[] )
 {
+    // Create stats directory to be deleted after every full test
+    // Full test = 10 executions of the program that successfully return a mean covergence and std
+    if ( !fs::exists( "stats" ) )
+    {
+        fs::create_directory( "stats" );
+    }
+
     // Enable logging for components
     LogComponentEnable( "MainSimulation", LOG_LEVEL_INFO );
     LogComponentEnable( "AdhocNetwork", LOG_LEVEL_INFO );
@@ -63,7 +72,7 @@ int main( int argc, char* argv[] )
     bool positionsFileExists = false;
 
     // Check if the positions file exists and has the positions
-    std::ifstream posFileIn( "node_positions.txt" );
+    std::ifstream posFileIn( "stats/node_positions.txt" );
     if ( posFileIn.good( ) )
     {
         NS_LOG_INFO( "Reading node positions from file." );
@@ -197,7 +206,7 @@ int main( int argc, char* argv[] )
                 Ptr<MobilityModel> mob = node->GetObject<MobilityModel>( );
                 nodePositions[i]       = mob->GetPosition( );
             }
-            std::ofstream posFileOut( "node_positions.txt", std::ios::out );
+            std::ofstream posFileOut( "stats/node_positions.txt", std::ios::out );
             if ( posFileOut.is_open( ) )
             {
                 for ( uint32_t i = 0; i < NUM_NODES; ++i )
@@ -230,14 +239,14 @@ int main( int argc, char* argv[] )
 
     // ============ (1) APPEND mean & std TO FILE ==============
     {
-        std::ofstream outFile( "convergence_results.txt", std::ios::app );
+        std::ofstream outFile( "stats/convergence_results.txt", std::ios::app );
         // Write mean and std to one line, space-separated
         outFile << meanConvergenceSteps << " " << stdDevConvergenceSteps << "\n";
     } // outFile closes automatically here
 
     // ============ (2) REOPEN AND PARSE LINES ==============
     {
-        std::ifstream inFile( "convergence_results.txt" );
+        std::ifstream inFile( "stats/convergence_results.txt" );
         std::vector<double> means;
         std::vector<double> stds;
 
@@ -268,11 +277,8 @@ int main( int argc, char* argv[] )
             std::cout << "Mean of the 10 means = " << meanOfMeans << "\n";
             std::cout << "Mean of the 10 stds  = " << meanOfStds << "\n\n";
 
-            // Optionally append to the file as well:
-            {
-                std::ofstream outFile( "convergence_results.txt", std::ios::app );
-                outFile << meanOfMeans << " " << meanOfStds << "\n";
-            }
+            fs::remove_all( "results" );
+            NS_LOG_INFO( "Deleted directory 'results'." );
         }
     }
 
