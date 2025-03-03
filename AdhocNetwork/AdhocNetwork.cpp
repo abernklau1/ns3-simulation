@@ -247,6 +247,7 @@ void AdhocNetwork::findNeighbors( uint32_t nodeId )
     NS_LOG_INFO( "Starting neighbor discovery for node " << nodeId << " at " << Simulator::Now( ).GetSeconds( ) << " seconds." );
     _neighbors.at( nodeId ).clear( );
 
+    // TODO: Find a better place for this
     // Get positions for all nodes
     for ( uint32_t i = 0; i < _numNodes; ++i )
     {
@@ -260,6 +261,7 @@ void AdhocNetwork::findNeighbors( uint32_t nodeId )
             NS_LOG_WARN( "Node " << i << " does not have a MobilityModel." );
         }
     }
+
     // Check distance and add neighbors
     for ( uint32_t j = 0; j < _numNodes; ++j )
     {
@@ -274,6 +276,14 @@ void AdhocNetwork::findNeighbors( uint32_t nodeId )
         }
     }
     NS_LOG_INFO( "Neighbor discovery completed for node " << nodeId << " at " << Simulator::Now( ).GetSeconds( ) << " seconds." );
+
+    /* TODO: Find a better place for this
+     * Currently, this needs to occur here because the positions vector isn't populated until this function is called in the simulation.
+     * One solution could be to grab the positions straight from the node's mobility model, but that would still require this to be called after initializing the positions,
+     * either randomly -- on the first subrun of a run -- or through the node_positions file.
+     * Another solution could be to just call this after the simulation runs completely, but I can't remember if I have a vector that holds only the initial coverage or not.
+     */
+    printNodeInfoToFile( "stats/node_info.txt" );
 }
 
 //
@@ -662,3 +672,44 @@ void AdhocNetwork::printFinalCoverage( uint32_t nodeId ) const
 }
 
 bool AdhocNetwork::isCoverageReached( ) { return _isCoverageReached; }
+
+void AdhocNetwork::printNodeInfoToFile( const std::string& filename ) const
+{
+    std::ofstream outFile( filename );
+    if ( !outFile.is_open( ) )
+    {
+        NS_LOG_ERROR( "Failed to open file " << filename << " for writing node information." );
+        return;
+    }
+
+    outFile << "========== Node Information ==========\n";
+    for ( uint32_t i = 0; i < _numNodes; ++i )
+    {
+        outFile << "----------------------------------------\n";
+        outFile << "Node ID: " << i << "\n";
+
+        // Print node position
+        if ( i < _positions.size( ) )
+        {
+            outFile << "Position: (" << _positions[i].x << ", " << _positions[i].y << ")\n";
+        }
+
+        // Print intrinsic coverage set (sensor–area pairs)
+        outFile << "Intrinsic Coverage Set: ";
+        for ( auto pair : _nodeCoverageSets[i] )
+        {
+            outFile << "(" << pair.first << ", " << pair.second << ") ";
+        }
+        outFile << "\n";
+
+        // Print neighbor information
+        outFile << "Discovered Neighbors: ";
+        for ( auto neighbor : _neighbors[i] )
+        {
+            outFile << neighbor->GetId( ) << " ";
+        }
+        outFile << "\n";
+    }
+    outFile << "========== End of Node Information ==========\n";
+    outFile.close( );
+}

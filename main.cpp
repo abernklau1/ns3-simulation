@@ -41,6 +41,7 @@ void ScheduleStep( AdhocNetwork& adhoc );
  * - Randomly selecting a direction (positive or negative).
  * - Adjusting the position by a fixed step size.
  * The new position is accepted only if it lies within the grid boundaries [0, GRID_X] and [0, GRID_Y].
+ * This is also only used for a specific experiment.
  *
  * @param adhoc The instance of AdhocNetwork whose node positions will be updated.
  * @param runIndex The current simulation run index (unused in this implementation).
@@ -164,6 +165,8 @@ int main( int argc, char* argv[] )
                             nodeToArea );
         adhoc.setup( );
 
+        // TODO: Is this in the right place? If the file exists, great, but if the network isn't finish setting up, these are overriden by the random mobility model
+        // Which is the exact opposite of what we want.
         // If the positions file exists, then override the randomly assigned positions.
         if ( positionsFileExists )
         {

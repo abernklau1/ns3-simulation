@@ -21,7 +21,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "../GossipHeader.h"
+#include "../GossipHeader/GossipHeader.h"
 
 /**
  * @brief Custom hash for std::pair<uint32_t, uint32_t> used in unordered_map.
@@ -282,6 +282,23 @@ class AdhocNetwork
          * @return true if at least one node has achieved full coverage; false otherwise.
          */
         bool isCoverageReached( );
+
+        //============================================================================
+        // Print Node Stats
+        //============================================================================
+
+        /**
+         * @brief Prints each node's complete initial state to a file.
+         *
+         * This function writes out, for each node, the following information:
+         * - Node ID
+         * - Position (x, y, z)
+         * - The intrinsic coverage set (sensor–area pairs)
+         * - The list of discovered neighbor IDs
+         *
+         * @param filename The path and name of the file where the information will be written.
+         */
+        void printNodeInfoToFile( const std::string& filename ) const;
 
         //============================================================================
         // Getters for Network Objects

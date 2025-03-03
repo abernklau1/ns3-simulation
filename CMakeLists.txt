@@ -10,6 +10,7 @@ add_definitions(-DNS3_LOG_ENABLE)
 file(GLOB SOURCES
     "*.cpp"
     "AdhocNetwork/*.cpp"
+    "GossipHeader/*.cpp"
 )
 
 # Create the executable
