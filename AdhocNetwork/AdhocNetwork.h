@@ -346,6 +346,24 @@ class AdhocNetwork
          */
         uint32_t getCoverageSteps( ) const { return _coveredSteps; }
 
+        /**
+         * @brief Returns the summed utilty of the covering node's original coverage.
+         * @return a double containing the summed utility
+         */
+        double getSummedUtility( ) const { return _coveredUtility; }
+
+        /**
+         * @brief Returns the ID of the node that holds the covering set
+         * @return a uint32_t holding the node ID
+         */
+        uint32_t getConvergedNode( ) const { return _coveringNode; }
+
+        /**
+         * @brief Returns a string representation of the covering set
+         * @return an std::string of the covering set
+         */
+        std::string getCoveredSetString( ) const { return _coveringSetString; }
+
     private:
         //===========================================================================
         // Simulation Parameters
@@ -399,6 +417,9 @@ class AdhocNetwork
         std::vector<std::set<uint32_t>> _receivedPackets;                       // Tracker for received (unique) packet IDs per node
         bool _isCoverageReached;                                                // Flag indicating if full coverage has been reached by any node
         uint32_t _coveredSteps;                                                 // Number of steps it took to converge for this simulation
+        double _coveredUtility;                                                 // Summed utility of the converged node's original coverage
+        uint32_t _coveringNode;                                                 // The node that covers
+        std::string _coveringSetString;                                         // String representation of the covering set
 
         //===========================================================================
         // Sensor and Area Assignments

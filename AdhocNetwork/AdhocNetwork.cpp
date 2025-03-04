@@ -46,13 +46,17 @@ AdhocNetwork::AdhocNetwork( uint32_t numNodes,
     _coverageSteps.resize( numNodes );
 
     // Default parameters
-    _gossipGroupSize   = 3;
-    _alpha             = 0.5;
-    _beta              = 0.5;
-    _lambda            = 1;
+    _gossipGroupSize = 3;
+    _alpha           = 0.5;
+    _beta            = 0.5;
+    _lambda          = 1;
+    // TODO: This should probably be the size of a packet that holds a covered set.
     _maximumDataSize   = 2048;
     _isCoverageReached = false;
     _coveredSteps      = 0;
+    _coveredUtility    = 0.0;
+    _coveringNode      = UINT32_MAX;
+    _coveringSetString.clear( );
 
     // Resize new bitset containers
     _sensorCoverageBitset.resize( numNodes );
@@ -172,7 +176,6 @@ void AdhocNetwork::setup( )
 void AdhocNetwork::initializeRandomPositions( double xMin, double xMax, double yMin, double yMax )
 {
     NS_LOG_INFO( "Initializing random positions for nodes." );
-    RngSeedManager::SetSeed( time( NULL ) );
     Ptr<UniformRandomVariable> x = CreateObject<UniformRandomVariable>( );
     x->SetAttribute( "Min", DoubleValue( xMin ) );
     x->SetAttribute( "Max", DoubleValue( xMax ) );
@@ -547,6 +550,61 @@ void AdhocNetwork::receivePacket( Ptr<Socket> socket )
                 // Now print the final coverage:
                 printFinalCoverage( receiverId );
                 _isCoverageReached = true;
+
+                //----------------------------------------------------
+                // Place in separate method
+                //----------------------------------------------------
+
+                // Calculate the summed utility of the covering node's original coverage
+                // Intrinsic coverage set size is the number of sensor–area pairs.
+                uint32_t coverageSetSize = _nodeCoverageSets[receiverId].size( );
+                // Calculate the data size using the same serialization formula.
+                uint32_t dataSize = 12 + 8 * coverageSetSize;
+
+                // Count intrinsic sensors and areas.
+                uint32_t sensorCount = _assignedSensors[receiverId].size( );
+                uint32_t areaCount   = 1; // Nodes are originally only assigned a single area
+
+                // Compute the utility using your alpha, beta, and lambda parameters.
+                //( static_cast<double>( packet->GetSize( ) ) / _maximumDataSize ) * ( _assignedSensors[senderId].size( ) + 1 /* Initial area covered by the node */ );
+                _coveredUtility = _alpha * sensorCount + _beta * areaCount - _lambda * ( ( dataSize / _maximumDataSize ) * ( _assignedSensors[receiverId].size( ) + 1 ) );
+
+                //----------------------------------------------------
+                // Place in separate method
+                //----------------------------------------------------
+
+                // Record which node converged:
+                _coveringNode = receiverId;
+
+                // TODO: Handle this better -- Create a function/private variable
+                // Create variable for the covering set
+
+                std::set<std::pair<uint32_t, uint32_t>> finalCoverage;
+
+                // Loop over each sensor bit
+                for ( size_t s = 0; s < MAX_SENSOR_TYPES; ++s )
+                {
+                    if ( _aggregatedSensorsBitset[receiverId].test( s ) )
+                    {
+                        // For every covered sensor, look at every covered area
+                        for ( size_t a = 0; a < MAX_AREA_TYPES; ++a )
+                        {
+                            if ( _aggregatedAreasBitset[receiverId].test( a ) )
+                            {
+                                // Insert the pair (sensorType, areaType)
+                                finalCoverage.insert( { static_cast<uint32_t>( s ), static_cast<uint32_t>( a ) } );
+                            }
+                        }
+                    }
+                }
+
+                std::ostringstream oss;
+                for ( auto& pair : finalCoverage )
+                {
+                    // E.g. "(sensor, area)"
+                    oss << "(" << pair.first << "," << pair.second << ")";
+                }
+                _coveringSetString = oss.str( );
 
                 Simulator::Stop( Seconds( Simulator::Now( ).GetSeconds( ) ) );
             }

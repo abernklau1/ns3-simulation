@@ -1,7 +1,11 @@
 #include "AdhocNetwork/AdhocNetwork.h"
 #include "ns3/command-line.h"
 #include "ns3/log.h"
+
+#include <algorithm>
+#include <cstdio>
 #include <filesystem>
+#include <random>
 namespace fs = std::filesystem;
 
 #ifndef NS3_LOG_ENABLE
@@ -20,6 +24,15 @@ using namespace ns3;
 #define GRID_Y              50.0
 
 NS_LOG_COMPONENT_DEFINE( "MainSimulation" );
+
+// TODO: Don't just provide solution, provide the nodes that contributed to the solution and their summed intrinsic utility.
+
+/**
+ * @brief Check if a file is empty or does not exist.
+ * @param filename The path to the file.
+ * @return true if the file does not exist or is zero-length, false otherwise.
+ */
+bool IsFileEmptyOrNotExist( const std::string& filename );
 
 /**
  * @brief Schedule the initial events for each node.
@@ -56,6 +69,15 @@ int main( int argc, char* argv[] )
     {
         fs::create_directory( "stats" );
     }
+
+    // Create logs directory for ns3 log files
+    if ( !fs::exists( "logs" ) )
+    {
+        fs::create_directory( "logs" );
+    }
+
+    // Send all NS_LOG output to the file
+    std::freopen( "logs/ns3.log", "w", stderr );
 
     // Enable logging for components
     LogComponentEnable( "MainSimulation", LOG_LEVEL_INFO );
@@ -104,52 +126,182 @@ int main( int argc, char* argv[] )
     }
 
     // Initialize sensor types and area IDs.
+    std::vector<std::vector<uint32_t>> nodeToSensors( NUM_NODES );
+    std::vector<uint32_t> nodeToArea( NUM_NODES );
+
+    // Store coverage sets in "stats/node_coverage.txt"
+    bool coverageFileExists = false;
+    std::ifstream coverageFileIn( "stats/node_coverage.txt" );
+    if ( coverageFileIn.good( ) )
+    {
+        NS_LOG_INFO( "Reading node coverage from file." );
+        bool fullyReadOk = true;
+        for ( uint32_t i = 0; i < NUM_NODES; ++i )
+        {
+            if ( !coverageFileIn.good( ) )
+            {
+                fullyReadOk = false;
+                break;
+            }
+
+            // First read how many sensors for this node
+            uint32_t sensorCount;
+            coverageFileIn >> sensorCount;
+            if ( !coverageFileIn.good( ) )
+            {
+                fullyReadOk = false;
+                break;
+            }
+
+            // Next read that many sensor IDs
+            std::vector<uint32_t> sensors;
+            sensors.reserve( sensorCount );
+            for ( uint32_t sc = 0; sc < sensorCount; ++sc )
+            {
+                uint32_t sensorId;
+                coverageFileIn >> sensorId;
+                if ( !coverageFileIn.good( ) )
+                {
+                    fullyReadOk = false;
+                    break;
+                }
+                sensors.push_back( sensorId );
+            }
+
+            if ( !fullyReadOk )
+                break;
+
+            // Finally read area
+            uint32_t areaId;
+            coverageFileIn >> areaId;
+            if ( !coverageFileIn.good( ) )
+            {
+                fullyReadOk = false;
+                break;
+            }
+
+            // Store results in the vector-of-vectors
+            nodeToSensors[i] = sensors;
+            nodeToArea[i]    = areaId;
+        }
+
+        if ( fullyReadOk )
+        {
+            coverageFileExists = true;
+        }
+        else
+        {
+            NS_LOG_WARN( "Coverage file incomplete. Will do random coverage assignment." );
+        }
+    }
+
+    coverageFileIn.close( );
     std::set<uint32_t> sensorTypes;
     std::set<uint32_t> areaTypes;
-    for ( uint32_t i = 0; i < NUM_SENSORS; ++i )
-    {
-        sensorTypes.insert( i );
-    }
-    for ( uint32_t i = 0; i < NUM_AREAS; ++i )
-    {
-        areaTypes.insert( i );
-    }
 
-    // Randomly assign sensors to nodes.
-    Ptr<UniformRandomVariable> rngSensors = CreateObject<UniformRandomVariable>( );
-    std::vector<std::vector<uint32_t>> nodeToSensors( NUM_NODES );
-    for ( uint32_t nodeIdx = 0; nodeIdx < NUM_NODES; ++nodeIdx )
+    if ( !coverageFileExists )
     {
-        // Choose between 1 and (NUM_SENSORS-1) sensors.
-        uint32_t numPossible = ( NUM_SENSORS > 1 ) ? ( NUM_SENSORS - 1 ) : 1;
-        uint32_t howMany     = rngSensors->GetInteger( 1, numPossible );
-
-        std::vector<uint32_t> allSensors;
-        for ( uint32_t s = 0; s < NUM_SENSORS; ++s )
+        for ( uint32_t i = 0; i < NUM_SENSORS; ++i )
         {
-            allSensors.push_back( s );
+            sensorTypes.insert( i );
         }
-        std::vector<uint32_t> chosenSensors;
-        for ( uint32_t c = 0; c < howMany && !allSensors.empty( ); ++c )
+        for ( uint32_t i = 0; i < NUM_AREAS; ++i )
         {
-            uint32_t idx = rngSensors->GetInteger( 0, allSensors.size( ) - 1 );
-            chosenSensors.push_back( allSensors[idx] );
-            allSensors.erase( allSensors.begin( ) + idx );
+            areaTypes.insert( i );
         }
-        nodeToSensors[nodeIdx] = chosenSensors;
-    }
 
-    Ptr<UniformRandomVariable> rngArea = CreateObject<UniformRandomVariable>( );
-    std::vector<uint32_t> nodeToArea( NUM_NODES );
-    for ( uint32_t nodeIdx = 0; nodeIdx < NUM_NODES; ++nodeIdx )
+        // Randomly assign sensors to nodes.
+        Ptr<UniformRandomVariable> rngSensors = CreateObject<UniformRandomVariable>( );
+
+        for ( uint32_t nodeIdx = 0; nodeIdx < NUM_NODES; ++nodeIdx )
+        {
+            // Choose between 1 and (NUM_SENSORS-1) sensors.
+            uint32_t numPossible = ( NUM_SENSORS > 1 ) ? ( NUM_SENSORS - 1 ) : 1;
+            uint32_t howMany     = rngSensors->GetInteger( 1, numPossible );
+
+            std::vector<uint32_t> allSensors;
+            for ( uint32_t s = 0; s < NUM_SENSORS; ++s )
+            {
+                allSensors.push_back( s );
+            }
+            std::vector<uint32_t> chosenSensors;
+            for ( uint32_t c = 0; c < howMany && !allSensors.empty( ); ++c )
+            {
+                uint32_t idx = rngSensors->GetInteger( 0, allSensors.size( ) - 1 );
+                chosenSensors.push_back( allSensors[idx] );
+                allSensors.erase( allSensors.begin( ) + idx );
+            }
+            nodeToSensors[nodeIdx] = chosenSensors;
+        }
+
+        // ---------------------------------------------------------------------
+        // Randomly assign areas to each of the NUM_NODES, ensuring each area
+        // [0..NUM_AREAS-1] is assigned at least once.
+        // ---------------------------------------------------------------------
+        Ptr<UniformRandomVariable> rngArea = CreateObject<UniformRandomVariable>( );
+        std::vector<uint32_t> areaPool( NUM_NODES );
+
+        // Assign each area exactly once, for the first NUM_AREAS entries
+        for ( uint32_t i = 0; i < NUM_AREAS; ++i )
+        {
+            areaPool[i] = i; // ensures area i is definitely included
+        }
+
+        // If we still have more nodes than areas, fill the rest with random picks
+        //     from the range [0..NUM_AREAS - 1]
+        for ( uint32_t i = NUM_AREAS; i < NUM_NODES; ++i )
+        {
+            areaPool[i] = rngArea->GetInteger( 0, NUM_AREAS - 1 );
+        }
+
+        // Shuffle areaPool to randomize the distribution
+        //     We'll use the standard library <algorithm> shuffle with ns-3 or a local random engine
+        std::random_device rd;     // or you can always seed with a fixed value
+        std::mt19937 gen( rd( ) ); // Mersenne Twister PRNG
+        std::shuffle( areaPool.begin( ), areaPool.end( ), gen );
+
+        // Finally, assign these areas to each node
+        for ( uint32_t nodeIdx = 0; nodeIdx < NUM_NODES; ++nodeIdx )
+        {
+            nodeToArea[nodeIdx] = areaPool[nodeIdx];
+        }
+
+        // Write out to "node_coverage.txt"
+        std::ofstream coverageFileOut( "stats/node_coverage.txt", std::ios::out );
+        if ( coverageFileOut.is_open( ) )
+        {
+            // Write a header line if the file is empty:
+            coverageFileOut << "NUM_SENSORS S1 S2 ... AREA\n";
+
+            for ( uint32_t i = 0; i < NUM_NODES; ++i )
+            {
+                coverageFileOut << nodeToSensors[i].size( ) << " ";
+                for ( auto s : nodeToSensors[i] )
+                {
+                    coverageFileOut << s << " ";
+                }
+                coverageFileOut << nodeToArea[i] << "\n";
+            }
+            coverageFileOut.close( );
+        }
+        else
+        {
+            NS_LOG_ERROR( "Failed to open node_coverage.txt for writing coverage sets." );
+        }
+    }
+    else
     {
-        nodeToArea[nodeIdx] = rngArea->GetInteger( 0, NUM_AREAS - 1 );
+        NS_LOG_INFO( "Re-using coverage sets from node_coverage.txt" );
     }
 
     // Run the simulation for each run.
     for ( uint32_t runIndex = 0; runIndex < NUM_RUNS; ++runIndex )
     {
         NS_LOG_INFO( "===== Starting Run #" << runIndex << " =====" );
+
+        // So the subset selection is more random
+        RngSeedManager::SetSeed( time( NULL ) + runIndex );
+        // RngSeedManager::SetRun( runIndex );
 
         AdhocNetwork adhoc( NUM_NODES,
                             sensorTypes,
@@ -191,6 +343,14 @@ int main( int argc, char* argv[] )
             NS_LOG_INFO( "Coverage not reached by " << MAX_RUN_TIME << " seconds; run timed out." );
         }
 
+        /*
+         * TODO: Events still seem to occur after stopping the simulation.
+         * My current assumption is that when Simulator::Stop() is called, it doesn't remove events from the event queue, it just signals that more events should not be add to the queue.
+         * So this call to Simulator::Destroy() might need to come immediately after convergence. Not sure the best way to do this as network information is needed after convergence.
+         */
+        Simulator::Destroy( );
+        NS_LOG_INFO( "===== Completed Run #" << runIndex << " =====" );
+
         // Record coverage steps if coverage was reached.
         int coverageSteps = adhoc.getCoverageSteps( );
         if ( adhoc.isCoverageReached( ) )
@@ -202,22 +362,39 @@ int main( int argc, char* argv[] )
         // If the positions file did not exist (first run), store the positions.
         if ( !positionsFileExists )
         {
-            NS_LOG_INFO( "Storing node positions to file." );
+            // Read positions
             for ( uint32_t i = 0; i < NUM_NODES; ++i )
             {
+                // Query the final position from the node’s MobilityModel
                 Ptr<Node> node         = adhoc.getNodes( ).Get( i );
                 Ptr<MobilityModel> mob = node->GetObject<MobilityModel>( );
-                nodePositions[i]       = mob->GetPosition( );
+                if ( mob )
+                {
+                    nodePositions[i] = mob->GetPosition( );
+                }
             }
-            std::ofstream posFileOut( "stats/node_positions.txt", std::ios::out );
+
+            NS_LOG_INFO( "Storing node positions to file." );
+
+            bool fileIsEmpty = IsFileEmptyOrNotExist( "stats/node_positions.txt" );
+
+            std::ofstream posFileOut( "stats/node_positions.txt", std::ios::app );
+            // use append mode, or std::ios::out|std::ios::trunc if you want to overwrite each time
+
             if ( posFileOut.is_open( ) )
             {
+                // If empty, write a header line
+                if ( fileIsEmpty )
+                {
+                    posFileOut << "X Y\n";
+                }
+
                 for ( uint32_t i = 0; i < NUM_NODES; ++i )
                 {
                     posFileOut << nodePositions[i].x << " " << nodePositions[i].y << "\n";
                 }
                 posFileOut.close( );
-                // Mark positions as stored so subsequent runs will use them.
+
                 positionsFileExists = true;
             }
             else
@@ -226,8 +403,55 @@ int main( int argc, char* argv[] )
             }
         }
 
-        Simulator::Destroy( );
-        NS_LOG_INFO( "===== Completed Run #" << runIndex << " =====" );
+        //--------------------------------------------------
+        // After each run completes, record the details for that run
+        //--------------------------------------------------
+        {
+            // Only write if coverage was reached
+            if ( adhoc.isCoverageReached( ) )
+            {
+                // Build or open the new file in append mode
+                bool fileIsEmpty = false;
+                {
+                    std::ifstream inCheck( "stats/converged_run_details.txt" );
+                    fileIsEmpty = ( !inCheck.good( ) || ( inCheck.peek( ) == std::ifstream::traits_type::eof( ) ) );
+                    inCheck.close( );
+                }
+
+                std::ofstream detailFile( "stats/converged_run_details.txt", std::ios::app );
+                if ( !detailFile.is_open( ) )
+                {
+                    NS_LOG_ERROR( "Could not open stats/converged_run_details.txt" );
+                }
+                else
+                {
+                    // If file is empty, write a header line first
+                    if ( fileIsEmpty )
+                    {
+                        detailFile << "RUN NODE STEPS UTILITY SET\n";
+                    }
+
+                    // Retrieve the relevant info from AdhocNetwork
+                    uint32_t convergedNode = adhoc.getConvergedNode( );
+                    uint32_t coveredSteps  = adhoc.getCoverageSteps( ); // or coverageSteps from your local variable
+                    double summedUtility   = adhoc.getSummedUtility( );
+                    std::string coveredSet = adhoc.getCoveredSetString( );
+
+                    // Write them in a single line:
+                    detailFile << runIndex << " " << convergedNode << " " << coveredSteps << " " << summedUtility << " " << coveredSet << "\n";
+                }
+                detailFile.close( );
+            }
+            else
+            {
+                // Optionally, record that runIndex did not converge:
+                // or skip entirely if you only want lines for coverage successes
+
+                // std::ofstream detailFile("stats/converged_run_details.txt", std::ios::app);
+                // detailFile << runIndex << " NO_COVERAGE\n";
+                // detailFile.close();
+            }
+        }
     }
 
     NS_LOG_INFO( "Number of runs counted in convergenceStepsVec: " << convergenceStepsVec.size( ) );
@@ -241,11 +465,22 @@ int main( int argc, char* argv[] )
     NS_LOG_INFO( "Standard deviation of convergence steps: " << stdDevConvergenceSteps );
 
     // ============ (1) APPEND mean & std TO FILE ==============
+    bool fileEmpty = IsFileEmptyOrNotExist( "stats/convergence_results.txt" );
+    std::ofstream outFile( "stats/convergence_results.txt", std::ios::app );
+
+    if ( !outFile.is_open( ) )
     {
-        std::ofstream outFile( "stats/convergence_results.txt", std::ios::app );
-        // Write mean and std to one line, space-separated
+        NS_LOG_ERROR( "Could not open stats/convergence_results.txt" );
+    }
+    else
+    {
+        if ( fileEmpty )
+        {
+            outFile << "MEAN STD\n";
+        }
         outFile << meanConvergenceSteps << " " << stdDevConvergenceSteps << "\n";
-    } // outFile closes automatically here
+    }
+    outFile.close( );
 
     // ============ (2) REOPEN AND PARSE LINES ==============
     {
@@ -286,6 +521,18 @@ int main( int argc, char* argv[] )
     }
 
     return 0;
+}
+
+bool IsFileEmptyOrNotExist( const std::string& filename )
+{
+    std::ifstream inCheck( filename, std::ios::ate | std::ios::binary );
+    if ( !inCheck.is_open( ) )
+    {
+        // Could not open => treat as "does not exist or empty"
+        return true;
+    }
+    // If inCheck.tellg() == 0 => file length is 0 => "empty"
+    return ( inCheck.tellg( ) == 0 );
 }
 
 void ScheduleStep( AdhocNetwork& adhoc )
