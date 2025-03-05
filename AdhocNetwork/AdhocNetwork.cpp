@@ -38,12 +38,13 @@ AdhocNetwork::AdhocNetwork( uint32_t numNodes,
     _neighbors.resize( numNodes );
     _positions.resize( numNodes );
     _neighborsSubset.resize( numNodes );
-    _nodeCoverageSets.resize( numNodes );
+    _intrinsicCoverageSets.resize( numNodes );
     _receivedPackets.resize( numNodes );
     _dataSizesScaled.resize( numNodes );
     _sensorCoverage.resize( numNodes );
     _areaCoverage.resize( numNodes );
     _coverageSteps.resize( numNodes );
+    _localView.resize( numNodes );
 
     // Default parameters
     _gossipGroupSize = 3;
@@ -59,12 +60,12 @@ AdhocNetwork::AdhocNetwork( uint32_t numNodes,
     _coveringSetString.clear( );
 
     // Resize new bitset containers
-    _sensorCoverageBitset.resize( numNodes );
-    _areaCoverageBitset.resize( numNodes );
-    _aggregatedSensorsBitset.resize( numNodes );
-    _aggregatedAreasBitset.resize( numNodes );
-    _neighborSensorBitset.resize( numNodes );
-    _neighborAreaBitset.resize( numNodes );
+    // _sensorCoverageBitset.resize( numNodes );
+    // _areaCoverageBitset.resize( numNodes );
+    // _aggregatedSensorsBitset.resize( numNodes );
+    // _aggregatedAreasBitset.resize( numNodes );
+    // _neighborSensorBitset.resize( numNodes );
+    // _neighborAreaBitset.resize( numNodes );
     NS_LOG_INFO( "AdhocNetwork created" );
 }
 
@@ -95,19 +96,19 @@ AdhocNetwork::~AdhocNetwork( )
     _neighbors.clear( );
     _positions.clear( );
     _neighborsSubset.clear( );
-    _nodeCoverageSets.clear( );
+    _intrinsicCoverageSets.clear( );
     _receivedPackets.clear( );
     _dataSizesScaled.clear( );
     _sensorCoverage.clear( );
     _areaCoverage.clear( );
     _coverageSteps.clear( );
 
-    _sensorCoverageBitset.clear( );
-    _areaCoverageBitset.clear( );
-    _aggregatedSensorsBitset.clear( );
-    _aggregatedAreasBitset.clear( );
-    _neighborSensorBitset.clear( );
-    _neighborAreaBitset.clear( );
+    // _sensorCoverageBitset.clear( );
+    // _areaCoverageBitset.clear( );
+    // _aggregatedSensorsBitset.clear( );
+    // _aggregatedAreasBitset.clear( );
+    // _neighborSensorBitset.clear( );
+    // _neighborAreaBitset.clear( );
 
     // Clear out sets of sensor types and areas
     _sensorTypes.clear( );
@@ -199,10 +200,10 @@ void AdhocNetwork::initializeNodeCoverageSets( )
     {
         _sensorCoverage[i].clear( );
         _areaCoverage[i].clear( );
-        _sensorCoverageBitset[i].reset( );
-        _areaCoverageBitset[i].reset( );
-        _aggregatedSensorsBitset[i].reset( );
-        _aggregatedAreasBitset[i].reset( );
+        // _sensorCoverageBitset[i].reset( );
+        // _areaCoverageBitset[i].reset( );
+        // _aggregatedSensorsBitset[i].reset( );
+        // _aggregatedAreasBitset[i].reset( );
     }
 
     // For each node, use the pre-assigned sensors and area as provided.
@@ -212,15 +213,15 @@ void AdhocNetwork::initializeNodeCoverageSets( )
         for ( uint32_t sensorType : _assignedSensors[i] )
         {
             _sensorCoverage[i].push_back( sensorType );
-            _sensorCoverageBitset[i].set( sensorType, true );
-            _aggregatedSensorsBitset[i].set( sensorType, true );
+            // _sensorCoverageBitset[i].set( sensorType, true );
+            // _aggregatedSensorsBitset[i].set( sensorType, true );
         }
 
         // For the area assignment, use the pre-assigned area (exactly one per node).
         uint32_t area = _assignedAreas[i];
         _areaCoverage[i].push_back( area );
-        _areaCoverageBitset[i].set( area, true );
-        _aggregatedAreasBitset[i].set( area, true );
+        // _areaCoverageBitset[i].set( area, true );
+        // _aggregatedAreasBitset[i].set( area, true );
 
         // Build the intrinsic coverage set as sensor-area pairs.
         std::set<std::pair<uint32_t, uint32_t>> coverageSet;
@@ -228,7 +229,8 @@ void AdhocNetwork::initializeNodeCoverageSets( )
         {
             coverageSet.insert( { sensor, area } );
         }
-        _nodeCoverageSets[i] = coverageSet;
+        _intrinsicCoverageSets[i] = coverageSet;
+        _localView[i][i]          = _intrinsicCoverageSets[i];
 
         NS_LOG_INFO( "Node " << i << " coverage set:" );
         for ( auto& pair : coverageSet )
@@ -380,7 +382,8 @@ Ptr<Socket> AdhocNetwork::getSenderSocket( uint32_t senderId, uint32_t receiverI
 //
 void AdhocNetwork::sendPackets( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors )
 {
-    std::set<std::pair<uint32_t, uint32_t>> coverageSet = _nodeCoverageSets.at( senderId );
+
+    std::set<std::pair<uint32_t, uint32_t>> coverageSet = _intrinsicCoverageSets.at( senderId );
     uint32_t dataSize                                   = 1024;
     for ( Ptr<Node> receiverNode : neighbors )
     {
@@ -465,11 +468,13 @@ void AdhocNetwork::receivePacket( Ptr<Socket> socket )
         Ipv4Address senderAddress = addr.GetIpv4( );
         uint32_t senderId         = getNodeIdFromIpAddress( senderAddress );
         uint32_t receiverId       = socket->GetNode( )->GetId( );
+
         if ( senderId == UINT32_MAX )
         {
             NS_LOG_WARN( "Received packet from unknown sender address: " << senderAddress );
             continue;
         }
+
         // Remove and process the GossipHeader.
         GossipHeader gossipHeader;
         packet->RemoveHeader( gossipHeader );
@@ -486,51 +491,62 @@ void AdhocNetwork::receivePacket( Ptr<Socket> socket )
         {
             _receivedPackets[receiverId].insert( gossipHeader.GetOriginNodeId( ) );
 
+            auto neighborCoverageSet = _intrinsicCoverageSets[senderId];
+
             // Calculate Utility using the bitset–based method.
-            double utility = calculateUtility( senderId, receiverId );
-            NS_LOG_INFO( "Sender Utility of Node " << senderId << ": " << utility );
+            double neighborUtility = calculateUtility( senderId, receiverId );
+            NS_LOG_INFO( "Sender Utility of Node " << senderId << ": " << neighborUtility );
 
-            if ( utility > 0 )
+            if ( neighborUtility > 0 )
             {
-                // Update the aggregated bitset.
-                _aggregatedSensorsBitset[receiverId] |= _sensorCoverageBitset[senderId];
-                _aggregatedAreasBitset[receiverId] |= _areaCoverageBitset[senderId];
+                // // Update the aggregated bitset.
+                // _aggregatedSensorsBitset[receiverId] |= _sensorCoverageBitset[senderId];
+                // _aggregatedAreasBitset[receiverId] |= _areaCoverageBitset[senderId];
 
-                // Record the neighbor's bitset for future recomputation.
-                std::bitset<MAX_SENSOR_TYPES> neighborSensorBitset;
-                neighborSensorBitset.reset( );
-                for ( uint32_t sensor : _sensorCoverage[senderId] )
-                {
-                    neighborSensorBitset.set( sensor, true );
-                }
-                _neighborSensorBitset[receiverId][senderId] = neighborSensorBitset;
+                // // Record the neighbor's bitset for future recomputation.
+                // std::bitset<MAX_SENSOR_TYPES> neighborSensorBitset;
+                // neighborSensorBitset.reset( );
+                // for ( uint32_t sensor : _sensorCoverage[senderId] )
+                // {
+                //     neighborSensorBitset.set( sensor, true );
+                // }
+                // _neighborSensorBitset[receiverId][senderId] = neighborSensorBitset;
 
-                std::bitset<MAX_AREA_TYPES> neighborAreaBitset;
-                neighborAreaBitset.reset( );
-                for ( uint32_t area : _areaCoverage[senderId] )
-                {
-                    neighborAreaBitset.set( area, true );
-                }
-                _neighborAreaBitset[receiverId][senderId] = neighborAreaBitset;
+                // std::bitset<MAX_AREA_TYPES> neighborAreaBitset;
+                // neighborAreaBitset.reset( );
+                // for ( uint32_t area : _areaCoverage[senderId] )
+                // {
+                //     neighborAreaBitset.set( area, true );
+                // }
+                // _neighborAreaBitset[receiverId][senderId] = neighborAreaBitset;
+
+                // Add (M_j, A_j) to local view
+                _localView[receiverId][senderId] = neighborCoverageSet;
             }
             else
             {
-                // If utility is not positive, remove this neighbor's contribution from the aggregated bitset.
-                // Erase the neighbor's bitset entry and recompute the aggregated bitset.
-                _neighborSensorBitset[receiverId].erase( senderId );
-                _neighborAreaBitset[receiverId].erase( senderId );
-                updateAggregatedSensors( receiverId );
-                updateAggregatedAreas( receiverId );
+                // // If utility is not positive, remove this neighbor's contribution from the aggregated bitset.
+                // // Erase the neighbor's bitset entry and recompute the aggregated bitset.
+                // _neighborSensorBitset[receiverId].erase( senderId );
+                // _neighborAreaBitset[receiverId].erase( senderId );
+                // updateAggregatedSensors( receiverId );
+                // updateAggregatedAreas( receiverId );
+
+                // Remove from local view if it exists
+                _localView[receiverId].erase( senderId );
             }
 
             double ownUtility = calculateUtility( receiverId, receiverId );
             NS_LOG_INFO( "Receiver Utility of Node " << receiverId << ": " << ownUtility );
-            if ( ownUtility < 0 )
+            if ( ownUtility <= 0 )
             {
-                _neighborSensorBitset[receiverId].erase( receiverId );
-                _neighborAreaBitset[receiverId].erase( receiverId );
-                updateAggregatedSensors( receiverId );
-                updateAggregatedAreas( receiverId );
+                // _neighborSensorBitset[receiverId].erase( receiverId );
+                // _neighborAreaBitset[receiverId].erase( receiverId );
+                // updateAggregatedSensors( receiverId );
+                // updateAggregatedAreas( receiverId );
+
+                // remove (M_i, A_i) from local view if it exists
+                _localView[receiverId].erase( receiverId );
             }
 
             _coverageSteps[receiverId]++;
@@ -555,19 +571,18 @@ void AdhocNetwork::receivePacket( Ptr<Socket> socket )
                 // Place in separate method
                 //----------------------------------------------------
 
-                // Calculate the summed utility of the covering node's original coverage
-                // Intrinsic coverage set size is the number of sensor–area pairs.
-                uint32_t coverageSetSize = _nodeCoverageSets[receiverId].size( );
-                // Calculate the data size using the same serialization formula.
-                uint32_t dataSize = 12 + 8 * coverageSetSize;
+                // Build coverage string, mark _coveringNode, etc.
+                // Then compute the final coverage’s summed utility:
+                _coveredUtility = computeSummedUtility( receiverId );
 
-                // Count intrinsic sensors and areas.
-                uint32_t sensorCount = _assignedSensors[receiverId].size( );
-                uint32_t areaCount   = 1; // Nodes are originally only assigned a single area
-
-                // Compute the utility using your alpha, beta, and lambda parameters.
-                //( static_cast<double>( packet->GetSize( ) ) / _maximumDataSize ) * ( _assignedSensors[senderId].size( ) + 1 /* Initial area covered by the node */ );
-                _coveredUtility = _alpha * sensorCount + _beta * areaCount - _lambda * ( ( dataSize / _maximumDataSize ) * ( _assignedSensors[receiverId].size( ) + 1 ) );
+                // Possibly log the contributors:
+                auto finalNodes = getFinalContributors( receiverId );
+                NS_LOG_INFO( "Final coverage contributed by node IDs:" );
+                for ( auto c : finalNodes )
+                {
+                    NS_LOG_INFO( "  => Node " << c );
+                }
+                NS_LOG_INFO( "Summed intrinsic utility = " << _coveredUtility );
 
                 //----------------------------------------------------
                 // Place in separate method
@@ -581,28 +596,37 @@ void AdhocNetwork::receivePacket( Ptr<Socket> socket )
 
                 std::set<std::pair<uint32_t, uint32_t>> finalCoverage;
 
-                // Loop over each sensor bit
-                for ( size_t s = 0; s < MAX_SENSOR_TYPES; ++s )
-                {
-                    if ( _aggregatedSensorsBitset[receiverId].test( s ) )
-                    {
-                        // For every covered sensor, look at every covered area
-                        for ( size_t a = 0; a < MAX_AREA_TYPES; ++a )
-                        {
-                            if ( _aggregatedAreasBitset[receiverId].test( a ) )
-                            {
-                                // Insert the pair (sensorType, areaType)
-                                finalCoverage.insert( { static_cast<uint32_t>( s ), static_cast<uint32_t>( a ) } );
-                            }
-                        }
-                    }
-                }
+                // // Loop over each sensor bit
+                // for ( size_t s = 0; s < MAX_SENSOR_TYPES; ++s )
+                // {
+                //     if ( _aggregatedSensorsBitset[receiverId].test( s ) )
+                //     {
+                //         // For every covered sensor, look at every covered area
+                //         for ( size_t a = 0; a < MAX_AREA_TYPES; ++a )
+                //         {
+                //             if ( _aggregatedAreasBitset[receiverId].test( a ) )
+                //             {
+                //                 // Insert the pair (sensorType, areaType)
+                //                 finalCoverage.insert( { static_cast<uint32_t>( s ), static_cast<uint32_t>( a ) } );
+                //             }
+                //         }
+                //     }
+                // }
 
+                // std::ostringstream oss;
+                // for ( auto& pair : finalCoverage )
+                // {
+                //     // "(sensor, area)"
+                //     oss << "(" << pair.first << "," << pair.second << ")";
+                // }
+                // _coveringSetString = oss.str( );
+
+                std::set<std::pair<uint32_t, uint32_t>> unionCoverage = buildUnionCoverage( receiverId );
+                // Convert unionCoverage to a string or store it in _coveringSetString
                 std::ostringstream oss;
-                for ( auto& pair : finalCoverage )
+                for ( auto& p : unionCoverage )
                 {
-                    // E.g. "(sensor, area)"
-                    oss << "(" << pair.first << "," << pair.second << ")";
+                    oss << "(" << p.first << "," << p.second << ")";
                 }
                 _coveringSetString = oss.str( );
 
@@ -630,11 +654,47 @@ std::pair<uint32_t, uint32_t> AdhocNetwork::setCoverage( uint32_t nodeId ) { ret
 //
 bool AdhocNetwork::isCovered( uint32_t receiverId )
 {
-    // Check that the number of sensor types in the aggregated sensor bitset equals the total number of sensor types.
-    bool sensorsCovered = ( _aggregatedSensorsBitset[receiverId].count( ) == _sensorTypes.size( ) );
-    // Check that the number of area types in the aggregated area bitset equals the total number of area types.
-    bool areasCovered = ( _aggregatedAreasBitset[receiverId].count( ) == _areas.size( ) );
-    return sensorsCovered && areasCovered;
+    // // Check that the number of sensor types in the aggregated sensor bitset equals the total number of sensor types.
+    // bool sensorsCovered = ( _aggregatedSensorsBitset[receiverId].count( ) == _sensorTypes.size( ) );
+    // // Check that the number of area types in the aggregated area bitset equals the total number of area types.
+    // bool areasCovered = ( _aggregatedAreasBitset[receiverId].count( ) == _areas.size( ) );
+    // return sensorsCovered && areasCovered;
+
+    auto unionCoverage = buildUnionCoverage( receiverId );
+
+    // We want to see if unionCoverage covers all sensor types S_total and area types A_total.
+    // This means: for every sensor s in S_total and area a in A_total,
+    // we must have (s,a) in unionCoverage.
+
+    // If your S_total is [0..(someMaxSensor-1)] and A_total is likewise,
+    // check each pair. Or just do bitset approach. But let's do pairs:
+
+    for ( uint32_t s : _sensorTypes )
+    {
+        for ( uint32_t a : _areas )
+        {
+            std::pair<uint32_t, uint32_t> p = { s, a };
+            if ( unionCoverage.find( p ) == unionCoverage.end( ) )
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+//
+// getFinalContributors: Identify the contributors of the final covering set
+//
+std::vector<uint32_t> AdhocNetwork::getFinalContributors( uint32_t nodeId ) const
+{
+    std::vector<uint32_t> contributors;
+    // Each key in _localView[nodeId] is a node ID with positive utility coverage
+    for ( auto& entry : _localView[nodeId] )
+    {
+        contributors.push_back( entry.first );
+    }
+    return contributors;
 }
 
 //
@@ -642,43 +702,142 @@ bool AdhocNetwork::isCovered( uint32_t receiverId )
 //
 double AdhocNetwork::calculateUtility( uint32_t senderId, uint32_t receiverId )
 {
-    std::bitset<MAX_SENSOR_TYPES> newSensorBits = _sensorCoverageBitset[senderId] & ~( _aggregatedSensorsBitset[receiverId] );
-    int newSensors                              = newSensorBits.count( );
-    NS_LOG_INFO( "New sensors: " << newSensors );
-    std::bitset<MAX_AREA_TYPES> newAreaBits = _areaCoverageBitset[senderId] & ~( _aggregatedAreasBitset[receiverId] );
-    int newAreas                            = newAreaBits.count( );
-    NS_LOG_INFO( "New areas: " << newAreas );
+    // std::bitset<MAX_SENSOR_TYPES> newSensorBits = _sensorCoverageBitset[senderId] & ~( _aggregatedSensorsBitset[receiverId] );
+    // int newSensors                              = newSensorBits.count( );
+    // NS_LOG_INFO( "New sensors: " << newSensors );
+    // std::bitset<MAX_AREA_TYPES> newAreaBits = _areaCoverageBitset[senderId] & ~( _aggregatedAreasBitset[receiverId] );
+    // int newAreas                            = newAreaBits.count( );
+    // NS_LOG_INFO( "New areas: " << newAreas );
 
-    return _alpha * newSensors + _beta * newAreas - _lambda * _dataSizesScaled[senderId];
-}
+    // return _alpha * newSensors + _beta * newAreas - _lambda * _dataSizesScaled[senderId];
 
-//
-// updateAggregatedSensors: helper function to recalculate the aggregated sensor bitset for receiverId.
-//
-void AdhocNetwork::updateAggregatedSensors( uint32_t receiverId )
-{
-    std::bitset<MAX_SENSOR_TYPES> aggregated;
-    aggregated = _sensorCoverageBitset[receiverId]; // Start with intrinsic coverage.
-    for ( const auto& pair : _neighborSensorBitset[receiverId] )
+    // 1) Retrieve the neighbor's coverage set:
+    //    (assuming it's "intrinsic coverage" for that neighbor)
+    //    e.g. std::set<std::pair<uint32_t, uint32_t>> neighborCoverageSet
+    //    If you stored coverage as sensor–area pairs, this is easy:
+    const auto& neighborCoverage = _intrinsicCoverageSets[senderId];
+
+    // 2) Build the union coverage from localView[receiverId].
+    //    This is a set of (sensor, area) pairs that the receiver's local view
+    //    currently includes.
+    std::set<std::pair<uint32_t, uint32_t>> unionCoverage = buildUnionCoverage( receiverId );
+
+    // 3) We want to see how many new sensor types and how many new area types
+    //    neighbor j would contribute. That means we need sets of sensors/areas
+    //    from unionCoverage.
+    std::unordered_set<uint32_t> existingSensors;
+    std::unordered_set<uint32_t> existingAreas;
+    for ( auto& pair : unionCoverage )
     {
-        aggregated |= pair.second;
+        existingSensors.insert( pair.first );
+        existingAreas.insert( pair.second );
     }
-    _aggregatedSensorsBitset[receiverId] = aggregated;
+
+    // 4) Similarly, from neighborCoverage (which is that neighbor's intrinsic coverage),
+    //    we can extract all sensors and areas as well.
+    //    Then compute how many are "new" compared to existingSensors/Areas.
+    std::unordered_set<uint32_t> neighborSensors;
+    std::unordered_set<uint32_t> neighborAreas;
+    for ( auto& p : neighborCoverage )
+    {
+        neighborSensors.insert( p.first );
+        neighborAreas.insert( p.second );
+    }
+
+    // count how many new sensors:
+    uint32_t newSensors = 0;
+    for ( auto s : neighborSensors )
+    {
+        if ( existingSensors.find( s ) == existingSensors.end( ) )
+        {
+            newSensors++;
+        }
+    }
+    // count how many new areas:
+    uint32_t newAreas = 0;
+    for ( auto a : neighborAreas )
+    {
+        if ( existingAreas.find( a ) == existingAreas.end( ) )
+        {
+            newAreas++;
+        }
+    }
+
+    // 5) The data cost we subtract. Suppose we store the data cost in
+    //    _dataSizesScaled[senderId], meaning "the scaled cost of neighbor j's coverage."
+    double dataCost = _dataSizesScaled[senderId];
+
+    // 6) Finally, Utility(j) = alpha * newSensors + beta * newAreas - lambda * dataCost
+    double utility = _alpha * newSensors + _beta * newAreas - _lambda * dataCost;
+
+    return utility;
 }
 
-//
-// updateAggregatedAreas: helper function to recalculate the aggregated area bitset for receiverId.
-//
-void AdhocNetwork::updateAggregatedAreas( uint32_t receiverId )
+double AdhocNetwork::computeIntrinsicUtilityOfNode( uint32_t nodeId ) const
 {
-    std::bitset<MAX_AREA_TYPES> aggregated;
-    aggregated = _areaCoverageBitset[receiverId]; // Start with intrinsic coverage.
-    for ( const auto& pair : _neighborAreaBitset[receiverId] )
-    {
-        aggregated |= pair.second;
-    }
-    _aggregatedAreasBitset[receiverId] = aggregated;
+    // Example: # of sensors, # of areas, minus data cost
+    // If each node has exactly 1 area, you do:
+    uint32_t numSensors = _assignedSensors[nodeId].size( );
+    uint32_t numAreas   = 1; // or however many you assigned
+    double dataCost     = _dataSizesScaled[nodeId];
+
+    // Utility = alpha * (#sensors) + beta * (#areas) - lambda * dataCost
+    return _alpha * numSensors + _beta * numAreas - _lambda * dataCost;
 }
+
+double AdhocNetwork::computeSummedUtility( uint32_t nodeId ) const
+{
+    // 1) Grab the final contributors from localView
+    auto contributors = getFinalContributors( nodeId );
+
+    // 2) Sum up each node’s intrinsic coverage utility
+    double total = 0.0;
+    for ( auto cid : contributors )
+    {
+        double util = computeIntrinsicUtilityOfNode( cid );
+        total += util;
+    }
+    return total;
+}
+
+std::set<std::pair<uint32_t, uint32_t>> AdhocNetwork::buildUnionCoverage( uint32_t nodeId ) const
+{
+    std::set<std::pair<uint32_t, uint32_t>> unionSet;
+    for ( auto& entry : _localView[nodeId] ) // entry: (neighborId -> coverageSet)
+    {
+        const auto& coverage = entry.second;
+        unionSet.insert( coverage.begin( ), coverage.end( ) );
+    }
+    return unionSet;
+}
+
+// //
+// // updateAggregatedSensors: helper function to recalculate the aggregated sensor bitset for receiverId.
+// //
+// void AdhocNetwork::updateAggregatedSensors( uint32_t receiverId )
+// {
+//     std::bitset<MAX_SENSOR_TYPES> aggregated;
+//     aggregated = _sensorCoverageBitset[receiverId]; // Start with intrinsic coverage.
+//     for ( const auto& pair : _neighborSensorBitset[receiverId] )
+//     {
+//         aggregated |= pair.second;
+//     }
+//     _aggregatedSensorsBitset[receiverId] = aggregated;
+// }
+
+// //
+// // updateAggregatedAreas: helper function to recalculate the aggregated area bitset for receiverId.
+// //
+// void AdhocNetwork::updateAggregatedAreas( uint32_t receiverId )
+// {
+//     std::bitset<MAX_AREA_TYPES> aggregated;
+//     aggregated = _areaCoverageBitset[receiverId]; // Start with intrinsic coverage.
+//     for ( const auto& pair : _neighborAreaBitset[receiverId] )
+//     {
+//         aggregated |= pair.second;
+//     }
+//     _aggregatedAreasBitset[receiverId] = aggregated;
+// }
 
 uint32_t AdhocNetwork::calculateNumSubNeighbors( uint32_t nodeId )
 {
@@ -696,37 +855,39 @@ uint32_t AdhocNetwork::calculateNumSubNeighbors( uint32_t nodeId )
 
 void AdhocNetwork::printFinalCoverage( uint32_t nodeId ) const
 {
-    // Convert the aggregatedSensorsBitset[nodeId] to a list of sensor IDs:
-    std::vector<uint32_t> coveredSensors;
-    for ( size_t s = 0; s < MAX_SENSOR_TYPES; s++ )
-    {
-        if ( _aggregatedSensorsBitset[nodeId].test( s ) )
-        {
-            coveredSensors.push_back( static_cast<uint32_t>( s ) );
-        }
-    }
+    // // Convert the aggregatedSensorsBitset[nodeId] to a list of sensor IDs:
+    // std::vector<uint32_t> coveredSensors;
+    // for ( size_t s = 0; s < MAX_SENSOR_TYPES; s++ )
+    // {
+    //     if ( _aggregatedSensorsBitset[nodeId].test( s ) )
+    //     {
+    //         coveredSensors.push_back( static_cast<uint32_t>( s ) );
+    //     }
+    // }
 
-    // Convert the aggregatedAreasBitset[nodeId] to a list of area IDs:
-    std::vector<uint32_t> coveredAreas;
-    for ( size_t a = 0; a < MAX_AREA_TYPES; a++ )
-    {
-        if ( _aggregatedAreasBitset[nodeId].test( a ) )
-        {
-            coveredAreas.push_back( static_cast<uint32_t>( a ) );
-        }
-    }
+    // // Convert the aggregatedAreasBitset[nodeId] to a list of area IDs:
+    // std::vector<uint32_t> coveredAreas;
+    // for ( size_t a = 0; a < MAX_AREA_TYPES; a++ )
+    // {
+    //     if ( _aggregatedAreasBitset[nodeId].test( a ) )
+    //     {
+    //         coveredAreas.push_back( static_cast<uint32_t>( a ) );
+    //     }
+    // }
 
-    NS_LOG_INFO( "=== Final Coverage for Node " << nodeId << " ===" );
-    NS_LOG_INFO( "Sensors covered: " );
-    for ( auto s : coveredSensors )
-    {
-        NS_LOG_INFO( "  Sensor ID: " << s );
-    }
-    NS_LOG_INFO( "Areas covered: " );
-    for ( auto a : coveredAreas )
-    {
-        NS_LOG_INFO( "  Area ID: " << a );
-    }
+    // NS_LOG_INFO( "=== Final Coverage for Node " << nodeId << " ===" );
+    // NS_LOG_INFO( "Sensors covered: " );
+    // for ( auto s : coveredSensors )
+    // {
+    //     NS_LOG_INFO( "  Sensor ID: " << s );
+    // }
+    // NS_LOG_INFO( "Areas covered: " );
+    // for ( auto a : coveredAreas )
+    // {
+    //     NS_LOG_INFO( "  Area ID: " << a );
+    // }
+
+    NS_LOG_INFO( "Final coverage set: " + _coveringSetString );
 }
 
 bool AdhocNetwork::isCoverageReached( ) { return _isCoverageReached; }
@@ -754,7 +915,7 @@ void AdhocNetwork::printNodeInfoToFile( const std::string& filename ) const
 
         // Print intrinsic coverage set (sensor–area pairs)
         outFile << "Intrinsic Coverage Set: ";
-        for ( auto pair : _nodeCoverageSets[i] )
+        for ( auto pair : _intrinsicCoverageSets[i] )
         {
             outFile << "(" << pair.first << ", " << pair.second << ") ";
         }

@@ -229,6 +229,14 @@ class AdhocNetwork
         bool isCovered( uint32_t receiverId );
 
         /**
+         * @brief Loops over the final coverage set to identify which node's contributed to the final set
+         *
+         * @param nodeId covering node's ID
+         * @return A vector of the IDs of contributing nodes
+         */
+        std::vector<uint32_t> getFinalContributors( uint32_t nodeId ) const;
+
+        /**
          * @brief Computes the utility of incorporating a sender's coverage information into a receiver's view.
          *
          * The utility is computed based on the number of "new" sensor types and areas that would be added.
@@ -240,22 +248,46 @@ class AdhocNetwork
         double calculateUtility( uint32_t senderId, uint32_t receiverId );
 
         /**
-         * @brief Updates the aggregated sensor bitset for a node.
+         * @brief Computes the intrinsic utility of a node
          *
-         * Combines the node's intrinsic sensor coverage with the sensor coverage of its neighbors.
-         *
-         * @param receiverId The node's ID.
+         * @param nodeId Node from which to calculate
+         * @return utility
          */
-        void updateAggregatedSensors( uint32_t receiverId );
+        double computeIntrinsicUtilityOfNode( uint32_t nodeId ) const;
 
         /**
-         * @brief Updates the aggregated area bitset for a node.
+         * @brief Calculates the summed utility of the covering nodes
          *
-         * Combines the node's intrinsic area coverage with the area coverage of its neighbors.
-         *
-         * @param receiverId The node's ID.
+         * @param nodeId Covering node ID
+         * @return summed utility
          */
-        void updateAggregatedAreas( uint32_t receiverId );
+        double computeSummedUtility( uint32_t nodeId ) const;
+
+        /**
+         * @brief Builds the union coverage set of a given node
+         *
+         * @param nodeId Id of node from which to build union set
+         * @return The union coverage set
+         */
+        std::set<std::pair<uint32_t, uint32_t>> buildUnionCoverage( uint32_t nodeId ) const;
+
+        // /**
+        //  * @brief Updates the aggregated sensor bitset for a node.
+        //  *
+        //  * Combines the node's intrinsic sensor coverage with the sensor coverage of its neighbors.
+        //  *
+        //  * @param receiverId The node's ID.
+        //  */
+        // void updateAggregatedSensors( uint32_t receiverId );
+
+        // /**
+        //  * @brief Updates the aggregated area bitset for a node.
+        //  *
+        //  * Combines the node's intrinsic area coverage with the area coverage of its neighbors.
+        //  *
+        //  * @param receiverId The node's ID.
+        //  */
+        // void updateAggregatedAreas( uint32_t receiverId );
 
         /**
          * @brief Calculates how many neighbor subsets include the given node.
@@ -412,14 +444,17 @@ class AdhocNetwork
         // Coverage and Utility Data
         //===========================================================================
 
-        std::vector<std::set<std::pair<uint32_t, uint32_t>>> _nodeCoverageSets; // Intrinsic coverage set per node (sensor-area pairs)
-        std::vector<uint32_t> _coverageSteps;                                   // Number of times each node has updated its coverage view
-        std::vector<std::set<uint32_t>> _receivedPackets;                       // Tracker for received (unique) packet IDs per node
-        bool _isCoverageReached;                                                // Flag indicating if full coverage has been reached by any node
-        uint32_t _coveredSteps;                                                 // Number of steps it took to converge for this simulation
-        double _coveredUtility;                                                 // Summed utility of the converged node's original coverage
-        uint32_t _coveringNode;                                                 // The node that covers
-        std::string _coveringSetString;                                         // String representation of the covering set
+        std::vector<std::set<std::pair<uint32_t, uint32_t>>> _intrinsicCoverageSets; // Intrinsic coverage set per node (sensor-area pairs)
+        // For each node i, store localView[i], which maps neighborID -> coverageSet
+        // coverageSet is e.g. std::set<std::pair<uint32_t, uint32_t>>
+        std::vector<std::unordered_map<uint32_t, std::set<std::pair<uint32_t, uint32_t>>>> _localView;
+        std::vector<uint32_t> _coverageSteps;             // Number of times each node has updated its coverage view
+        std::vector<std::set<uint32_t>> _receivedPackets; // Tracker for received (unique) packet IDs per node
+        bool _isCoverageReached;                          // Flag indicating if full coverage has been reached by any node
+        uint32_t _coveredSteps;                           // Number of steps it took to converge for this simulation
+        double _coveredUtility;                           // Summed utility of the converged node's original coverage
+        uint32_t _coveringNode;                           // The node that covers
+        std::string _coveringSetString;                   // String representation of the covering set
 
         //===========================================================================
         // Sensor and Area Assignments
@@ -434,14 +469,14 @@ class AdhocNetwork
         // Bitset Representations for Coverage
         //===========================================================================
 
-        static constexpr size_t MAX_SENSOR_TYPES = 3;                                                   // Maximum number of sensor types (used for bitset sizes)
-        static constexpr size_t MAX_AREA_TYPES   = 3;                                                   // Maximum number of area types (used for bitset sizes)
-        std::vector<std::bitset<MAX_SENSOR_TYPES>> _sensorCoverageBitset;                               // Bitset representation of intrinsic sensor coverage per node
-        std::vector<std::bitset<MAX_AREA_TYPES>> _areaCoverageBitset;                                   // Bitset representation of intrinsic area coverage per node
-        std::vector<std::bitset<MAX_SENSOR_TYPES>> _aggregatedSensorsBitset;                            // Aggregated sensor coverage from self and neighbors
-        std::vector<std::bitset<MAX_AREA_TYPES>> _aggregatedAreasBitset;                                // Aggregated area coverage from self and neighbors
-        std::vector<std::unordered_map<uint32_t, std::bitset<MAX_SENSOR_TYPES>>> _neighborSensorBitset; // Stores each neighbor's sensor bitset per node
-        std::vector<std::unordered_map<uint32_t, std::bitset<MAX_AREA_TYPES>>> _neighborAreaBitset;     // Stores each neighbor's area bitset per node
+        // static constexpr size_t MAX_SENSOR_TYPES = 3;                                                   // Maximum number of sensor types (used for bitset sizes)
+        // static constexpr size_t MAX_AREA_TYPES   = 3;                                                   // Maximum number of area types (used for bitset sizes)
+        // std::vector<std::bitset<MAX_SENSOR_TYPES>> _sensorCoverageBitset;                               // Bitset representation of intrinsic sensor coverage per node
+        // std::vector<std::bitset<MAX_AREA_TYPES>> _areaCoverageBitset;                                   // Bitset representation of intrinsic area coverage per node
+        // std::vector<std::bitset<MAX_SENSOR_TYPES>> _aggregatedSensorsBitset;                            // Aggregated sensor coverage from self and neighbors
+        // std::vector<std::bitset<MAX_AREA_TYPES>> _aggregatedAreasBitset;                                // Aggregated area coverage from self and neighbors
+        // std::vector<std::unordered_map<uint32_t, std::bitset<MAX_SENSOR_TYPES>>> _neighborSensorBitset; // Stores each neighbor's sensor bitset per node
+        // std::vector<std::unordered_map<uint32_t, std::bitset<MAX_AREA_TYPES>>> _neighborAreaBitset;     // Stores each neighbor's area bitset per node
 
         //===========================================================================
         // Pre-assigned Sensor and Area Assignments
