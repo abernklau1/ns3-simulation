@@ -21,6 +21,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "../CoverageQuad.h"
 #include "../GossipHeader/GossipHeader.h"
 
 /**
@@ -110,6 +111,12 @@ class AdhocNetwork
         void initializeNodeCoverageSets( );
 
         //============================================================================
+        // Round Implementation
+        //============================================================================
+
+        void startRounds( );
+
+        //============================================================================
         // Neighbor Discovery and Selection
         //============================================================================
 
@@ -130,22 +137,6 @@ class AdhocNetwork
          * @param nodeId The ID of the node selecting a subset.
          */
         void findNeighborsSubset( uint32_t nodeId );
-
-        /**
-         * @brief Schedules periodic neighbor discovery events.
-         *
-         * @param interval The time interval between successive neighbor discovery callbacks.
-         */
-        void scheduleFindNeighbors( double interval );
-
-        /**
-         * @brief Callback function for periodic neighbor discovery.
-         *
-         * Invokes neighbor discovery for node 0 and then schedules packet sending for all nodes.
-         *
-         * @param interval The time interval used for scheduling.
-         */
-        void findNeighborsCallback( double interval );
 
         //============================================================================
         // Packet Sending/Receiving (Gossip Communication)
@@ -234,7 +225,7 @@ class AdhocNetwork
          * @param nodeId covering node's ID
          * @return A vector of the IDs of contributing nodes
          */
-        std::vector<uint32_t> getFinalContributors( uint32_t nodeId ) const;
+        // std::vector<uint32_t> getFinalContributors( uint32_t nodeId ) const;
 
         /**
          * @brief Computes the utility of incorporating a sender's coverage information into a receiver's view.
@@ -261,7 +252,7 @@ class AdhocNetwork
          * @param nodeId Covering node ID
          * @return summed utility
          */
-        double computeSummedUtility( uint32_t nodeId ) const;
+        double computeSummedUtility( uint32_t nodeId );
 
         /**
          * @brief Builds the union coverage set of a given node
@@ -269,35 +260,7 @@ class AdhocNetwork
          * @param nodeId Id of node from which to build union set
          * @return The union coverage set
          */
-        std::set<std::pair<uint32_t, uint32_t>> buildUnionCoverage( uint32_t nodeId ) const;
-
-        // /**
-        //  * @brief Updates the aggregated sensor bitset for a node.
-        //  *
-        //  * Combines the node's intrinsic sensor coverage with the sensor coverage of its neighbors.
-        //  *
-        //  * @param receiverId The node's ID.
-        //  */
-        // void updateAggregatedSensors( uint32_t receiverId );
-
-        // /**
-        //  * @brief Updates the aggregated area bitset for a node.
-        //  *
-        //  * Combines the node's intrinsic area coverage with the area coverage of its neighbors.
-        //  *
-        //  * @param receiverId The node's ID.
-        //  */
-        // void updateAggregatedAreas( uint32_t receiverId );
-
-        /**
-         * @brief Calculates how many neighbor subsets include the given node.
-         *
-         * This is used for tracking how many distinct packets a node should receive.
-         *
-         * @param nodeId The node's ID.
-         * @return The number of neighbor subsets that include this node.
-         */
-        uint32_t calculateNumSubNeighbors( uint32_t nodeId );
+        std::set<CoverageQuad, CoverageQuadLess> buildUnionCoverage( uint32_t nodeId ) const;
 
         /**
          * @brief Prints the final aggregated coverage (sensor and area) of a node.
@@ -331,6 +294,12 @@ class AdhocNetwork
          * @param filename The path and name of the file where the information will be written.
          */
         void printNodeInfoToFile( const std::string& filename ) const;
+
+        /**
+         * @brief Checks for duplicates in a local view against a receiving coverage set.
+         *
+         */
+        void checkDuplicates( const uint32_t& receiverId, const std::set<CoverageQuad, CoverageQuadLess>& senderCoverage );
 
         //============================================================================
         // Getters for Network Objects
@@ -433,28 +402,30 @@ class AdhocNetwork
         // Gossip Protocol Parameters
         //===========================================================================
 
-        uint32_t _gossipGroupSize;              // Number of neighbors selected for gossip communication
-        double _alpha;                          // Weight factor for sensor utility
-        double _beta;                           // Weight factor for area utility
-        double _lambda;                         // Weight factor for data size penalty
-        uint32_t _maximumDataSize;              // Maximum data size used for scaling
-        std::vector<uint32_t> _dataSizesScaled; // Scaled data size per node
+        uint32_t _gossipGroupSize;                                      // Number of neighbors selected for gossip communication
+        double _alpha;                                                  // Weight factor for sensor utility
+        double _beta;                                                   // Weight factor for area utility
+        double _lambda;                                                 // Weight factor for data size penalty
+        uint32_t _maximumDataSize;                                      // Maximum data size used for scaling
+        std::vector<uint32_t> _dataSizesScaled;                         // Scaled data size per node
+        std::vector<int> _coverageVersion;                              // Each node's current coverage version
+        std::vector<std::unordered_map<int32_t, int>> _lastSeenVersion; // Last seen version of a gossip packet nodes have seen
 
         //===========================================================================
         // Coverage and Utility Data
         //===========================================================================
 
-        std::vector<std::set<std::pair<uint32_t, uint32_t>>> _intrinsicCoverageSets; // Intrinsic coverage set per node (sensor-area pairs)
-        // For each node i, store localView[i], which maps neighborID -> coverageSet
-        // coverageSet is e.g. std::set<std::pair<uint32_t, uint32_t>>
-        std::vector<std::unordered_map<uint32_t, std::set<std::pair<uint32_t, uint32_t>>>> _localView;
-        std::vector<uint32_t> _coverageSteps;             // Number of times each node has updated its coverage view
+        std::vector<std::set<CoverageQuad, CoverageQuadLess>> _localView;
+        std::vector<std::set<CoverageQuad, CoverageQuadLess>> _intrinsicCoverageSets;
+        std::vector<double> _intrinsicUtility;
         std::vector<std::set<uint32_t>> _receivedPackets; // Tracker for received (unique) packet IDs per node
         bool _isCoverageReached;                          // Flag indicating if full coverage has been reached by any node
         uint32_t _coveredSteps;                           // Number of steps it took to converge for this simulation
         double _coveredUtility;                           // Summed utility of the converged node's original coverage
         uint32_t _coveringNode;                           // The node that covers
         std::string _coveringSetString;                   // String representation of the covering set
+        int _roundId;
+        int _lastRoundId;
 
         //===========================================================================
         // Sensor and Area Assignments
@@ -466,24 +437,18 @@ class AdhocNetwork
         std::vector<std::vector<uint32_t>> _areaCoverage;   // Intrinsic area (one per node) assignments
 
         //===========================================================================
-        // Bitset Representations for Coverage
-        //===========================================================================
-
-        // static constexpr size_t MAX_SENSOR_TYPES = 3;                                                   // Maximum number of sensor types (used for bitset sizes)
-        // static constexpr size_t MAX_AREA_TYPES   = 3;                                                   // Maximum number of area types (used for bitset sizes)
-        // std::vector<std::bitset<MAX_SENSOR_TYPES>> _sensorCoverageBitset;                               // Bitset representation of intrinsic sensor coverage per node
-        // std::vector<std::bitset<MAX_AREA_TYPES>> _areaCoverageBitset;                                   // Bitset representation of intrinsic area coverage per node
-        // std::vector<std::bitset<MAX_SENSOR_TYPES>> _aggregatedSensorsBitset;                            // Aggregated sensor coverage from self and neighbors
-        // std::vector<std::bitset<MAX_AREA_TYPES>> _aggregatedAreasBitset;                                // Aggregated area coverage from self and neighbors
-        // std::vector<std::unordered_map<uint32_t, std::bitset<MAX_SENSOR_TYPES>>> _neighborSensorBitset; // Stores each neighbor's sensor bitset per node
-        // std::vector<std::unordered_map<uint32_t, std::bitset<MAX_AREA_TYPES>>> _neighborAreaBitset;     // Stores each neighbor's area bitset per node
-
-        //===========================================================================
         // Pre-assigned Sensor and Area Assignments
         //===========================================================================
 
         std::vector<std::vector<uint32_t>> _assignedSensors; // Pre-assigned sensor types for each node
         std::vector<uint32_t> _assignedAreas;                // Pre-assigned area for each node
+
+        //===========================================================================
+        // Rounds
+        //===========================================================================
+        void doRound( );
+
+        bool coversSensorArea( const std::set<CoverageQuad, CoverageQuadLess>& coverageSet, uint32_t sensor, uint32_t area );
 };
 
 #endif // ADHOC_NETWORK_H

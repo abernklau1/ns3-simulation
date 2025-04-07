@@ -6,6 +6,8 @@
 #include "ns3/ipv4-address.h"
 #include "ns3/packet.h"
 
+#include "../CoverageQuad.h"
+
 #include <set>
 
 using namespace ns3;
@@ -31,10 +33,11 @@ class GossipHeader : public Header
          * @brief Constructs a GossipHeader with specified values.
          *
          * @param originNodeId The ID of the originating node.
+         * @param coverageVersion The ID of the gossip round.
          * @param coverageSet A set of sensor-area pairs representing the node's coverage.
          * @param dataSize The data size associated with the header.
          */
-        GossipHeader( uint32_t originNodeId, std::set<std::pair<uint32_t, uint32_t>> coverageSet, uint32_t dataSize );
+        GossipHeader( uint32_t originNodeId, uint32_t coverageVersion, std::set<CoverageQuad, CoverageQuadLess> coverageSet, uint32_t dataSize );
 
         /**
          * @brief Destructor.
@@ -55,19 +58,22 @@ class GossipHeader : public Header
          */
         uint32_t GetOriginNodeId( ) const;
 
+        void SetCoverageVersion( uint32_t coverageVersion );
+        uint32_t GetCoverageVersion( ) const;
+
         /**
          * @brief Sets the coverage set.
          *
          * @param coverageSet A set of sensor-area pairs representing coverage.
          */
-        void SetCoverageSet( const std::set<std::pair<uint32_t, uint32_t>>& coverageSet );
+        void SetCoverageSet( const std::set<CoverageQuad, CoverageQuadLess>& coverageSet );
 
         /**
          * @brief Gets the coverage set.
          *
          * @return A set of sensor-area pairs.
          */
-        std::set<std::pair<uint32_t, uint32_t>> GetCoverageSet( ) const;
+        std::set<CoverageQuad, CoverageQuadLess> GetCoverageSet( ) const;
 
         /**
          * @brief Sets the data size.
@@ -131,9 +137,10 @@ class GossipHeader : public Header
         virtual uint32_t Deserialize( Buffer::Iterator start );
 
     private:
-        uint32_t _originNodeId;                               // The originating node's ID.
-        std::set<std::pair<uint32_t, uint32_t>> _coverageSet; // Set of sensor-area pairs representing coverage.
-        uint32_t _dataSize;                                   // The data size value.
+        uint32_t _originNodeId;                                // The originating node's ID.
+        uint32_t _coverageVersion;                             // Gossip coverage round
+        std::set<CoverageQuad, CoverageQuadLess> _coverageSet; // Set of sensor-area pairs representing coverage.
+        uint32_t _dataSize;                                    // The data size value.
 };
 
 #endif // GOSSIP_HEADER_H

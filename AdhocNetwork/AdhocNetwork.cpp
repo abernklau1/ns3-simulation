@@ -43,29 +43,33 @@ AdhocNetwork::AdhocNetwork( uint32_t numNodes,
     _dataSizesScaled.resize( numNodes );
     _sensorCoverage.resize( numNodes );
     _areaCoverage.resize( numNodes );
-    _coverageSteps.resize( numNodes );
     _localView.resize( numNodes );
+    _intrinsicUtility.resize( numNodes );
 
     // Default parameters
-    _gossipGroupSize = 3;
-    _alpha           = 0.5;
-    _beta            = 0.5;
-    _lambda          = 1;
-    // TODO: This should probably be the size of a packet that holds a covered set.
-    _maximumDataSize   = 2048;
+    _gossipGroupSize   = 3;
+    _alpha             = 0.3;
+    _beta              = 0.7;
+    _lambda            = 1.0;
+    _maximumDataSize   = 2048; // Size of a packet that holds a covered set: 4 * _numSensors + 4 * _numAreas + 16 + 4 * pairs;
     _isCoverageReached = false;
     _coveredSteps      = 0;
     _coveredUtility    = 0.0;
     _coveringNode      = UINT32_MAX;
     _coveringSetString.clear( );
+    _roundId     = 0;
+    _lastRoundId = -1;
 
-    // Resize new bitset containers
-    // _sensorCoverageBitset.resize( numNodes );
-    // _areaCoverageBitset.resize( numNodes );
-    // _aggregatedSensorsBitset.resize( numNodes );
-    // _aggregatedAreasBitset.resize( numNodes );
-    // _neighborSensorBitset.resize( numNodes );
-    // _neighborAreaBitset.resize( numNodes );
+    _coverageVersion.resize( _numNodes, 0 );
+    _lastSeenVersion.resize( _numNodes );
+    for ( int i = 0; i < _numNodes; i++ )
+    {
+        for ( int j = 0; j < _numNodes; j++ )
+        {
+            _lastSeenVersion[i].emplace( j, -1 );
+        }
+    }
+
     NS_LOG_INFO( "AdhocNetwork created" );
 }
 
@@ -101,14 +105,6 @@ AdhocNetwork::~AdhocNetwork( )
     _dataSizesScaled.clear( );
     _sensorCoverage.clear( );
     _areaCoverage.clear( );
-    _coverageSteps.clear( );
-
-    // _sensorCoverageBitset.clear( );
-    // _areaCoverageBitset.clear( );
-    // _aggregatedSensorsBitset.clear( );
-    // _aggregatedAreasBitset.clear( );
-    // _neighborSensorBitset.clear( );
-    // _neighborAreaBitset.clear( );
 
     // Clear out sets of sensor types and areas
     _sensorTypes.clear( );
@@ -154,10 +150,6 @@ void AdhocNetwork::setup( )
     _interfaces = ipv4.Assign( _devices );
     NS_LOG_INFO( "IPv4 addresses assigned" );
 
-    // NS_LOG_INFO( "Enabling pcap" );
-    // wifiPhy.EnablePcapAll( "server-debug", false );
-    // NS_LOG_INFO( "Pcap enabled" );
-
     NS_LOG_INFO( "Setting up data receivers" );
     for ( uint32_t i = 0; i < _nodes.GetN( ); ++i )
     {
@@ -169,6 +161,11 @@ void AdhocNetwork::setup( )
     NS_LOG_INFO( "Data receivers set up" );
 
     initializeNodeCoverageSets( );
+
+    for ( uint32_t i = 0; i < _numNodes; ++i )
+    {
+        findNeighbors( i );
+    }
 }
 
 //
@@ -195,49 +192,91 @@ void AdhocNetwork::initializeRandomPositions( double xMin, double xMax, double y
 //
 void AdhocNetwork::initializeNodeCoverageSets( )
 {
-    // Clear old sensor and area coverage data for all nodes.
     for ( uint32_t i = 0; i < _numNodes; ++i )
     {
-        _sensorCoverage[i].clear( );
-        _areaCoverage[i].clear( );
-        // _sensorCoverageBitset[i].reset( );
-        // _areaCoverageBitset[i].reset( );
-        // _aggregatedSensorsBitset[i].reset( );
-        // _aggregatedAreasBitset[i].reset( );
-    }
-
-    // For each node, use the pre-assigned sensors and area as provided.
-    for ( uint32_t i = 0; i < _numNodes; ++i )
-    {
-        // Set up the intrinsic sensor coverage for node i using _assignedSensors.
-        for ( uint32_t sensorType : _assignedSensors[i] )
+        _intrinsicUtility[i] = ( static_cast<double>( 8 +
+                  _assignedSensors[i].size( ) *
+                  16 /* The number of initial pairs in each node's intrinsic coverage set is equivalent to the number of assigned sensors because they are initially assigned a single area, multiplied by 8 because each pair contains 8 bytes*/ ) /
+              _maximumDataSize ) *
+            ( _assignedSensors[i].size( ) + 1 /* Initial area covered by the node */ );
+        std::set<CoverageQuad, CoverageQuadLess> coverageSet;
+        for ( auto sensor : _assignedSensors[i] )
         {
-            _sensorCoverage[i].push_back( sensorType );
-            // _sensorCoverageBitset[i].set( sensorType, true );
-            // _aggregatedSensorsBitset[i].set( sensorType, true );
-        }
-
-        // For the area assignment, use the pre-assigned area (exactly one per node).
-        uint32_t area = _assignedAreas[i];
-        _areaCoverage[i].push_back( area );
-        // _areaCoverageBitset[i].set( area, true );
-        // _aggregatedAreasBitset[i].set( area, true );
-
-        // Build the intrinsic coverage set as sensor-area pairs.
-        std::set<std::pair<uint32_t, uint32_t>> coverageSet;
-        for ( uint32_t sensor : _sensorCoverage[i] )
-        {
-            coverageSet.insert( { sensor, area } );
+            CoverageQuad c;
+            c.sensor     = sensor;
+            c.area       = _assignedAreas[i];
+            c.originId   = i;
+            c.dataScaled = _intrinsicUtility[i];
+            coverageSet.insert( c );
         }
         _intrinsicCoverageSets[i] = coverageSet;
-        _localView[i][i]          = _intrinsicCoverageSets[i];
-
-        NS_LOG_INFO( "Node " << i << " coverage set:" );
-        for ( auto& pair : coverageSet )
-        {
-            NS_LOG_INFO( "  (" << pair.first << ", " << pair.second << ")" );
-        }
+        _localView[i]             = coverageSet;
     }
+}
+
+// Start the gossip rounds (call once in main or after setup).
+void AdhocNetwork::startRounds( )
+{
+    NS_LOG_INFO( "Starting round-based gossip with no maximum round count." );
+    doRound( );
+}
+
+void AdhocNetwork::doRound( )
+{
+    NS_LOG_INFO( "===== Starting Round " << _roundId << " at time " << Simulator::Now( ).GetSeconds( ) << "s =====" );
+
+    // For each node, find neighbors and pick a subset
+    for ( uint32_t i = 0; i < _numNodes; ++i )
+    {
+        findNeighborsSubset( i );
+    }
+
+    // For each node, send its gossip messages
+    for ( uint32_t i = 0; i < _numNodes; ++i )
+    {
+        sendPackets( _nodes.Get( i ), i, _neighborsSubset[i] );
+    }
+
+    // Wait some fixed 'roundDuration' so that packets can be delivered
+    double roundDuration = 2.0;
+    Simulator::Schedule( Seconds( roundDuration ), [this]( ) {
+        // Check coverage after this round has “settled”
+        bool anyCovered = false;
+        for ( uint32_t i = 0; i < _numNodes; i++ )
+        {
+            if ( isCovered( i ) )
+            {
+                anyCovered      = true;
+                _coveringNode   = i;
+                _coveredUtility = computeSummedUtility( i );
+                break;
+            }
+        }
+
+        if ( anyCovered )
+        {
+            NS_LOG_INFO( "Coverage reached by the end of Round " << _roundId << " at time " << Simulator::Now( ).GetSeconds( ) << "s." );
+            _coveredSteps      = _roundId;
+            _isCoverageReached = true;
+            std::ostringstream coveredSetStream;
+            for ( const auto& quad : _localView[_coveringNode] )
+            {
+                coveredSetStream << "(" << quad.sensor << "," << quad.area << "," << quad.originId << ") ";
+            }
+            _coveringSetString = coveredSetStream.str( );
+            Simulator::Stop( );
+            return;
+        }
+
+        // If coverage not reached, do the next round
+        _lastRoundId = _roundId;
+        _roundId++;
+        for ( int i = 0; i < _numNodes; i++ )
+        {
+            _coverageVersion[i]++;
+        }
+        doRound( );
+    } );
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -249,7 +288,7 @@ void AdhocNetwork::initializeNodeCoverageSets( )
 //
 void AdhocNetwork::findNeighbors( uint32_t nodeId )
 {
-    NS_LOG_INFO( "Starting neighbor discovery for node " << nodeId << " at " << Simulator::Now( ).GetSeconds( ) << " seconds." );
+    // NS_LOG_INFO( "Starting neighbor discovery for node " << nodeId << " at " << Simulator::Now( ).GetSeconds( ) << " seconds." );
     _neighbors.at( nodeId ).clear( );
 
     // TODO: Find a better place for this
@@ -276,11 +315,11 @@ void AdhocNetwork::findNeighbors( uint32_t nodeId )
             if ( distance <= _communicationRange )
             {
                 _neighbors.at( nodeId ).emplace_back( _nodes.Get( j ) );
-                NS_LOG_DEBUG( "Node " << nodeId << " is a neighbor of Node " << j << " (Distance: " << distance << ")" );
+                // NS_LOG_DEBUG( "Node " << nodeId << " is a neighbor of Node " << j << " (Distance: " << distance << ")" );
             }
         }
     }
-    NS_LOG_INFO( "Neighbor discovery completed for node " << nodeId << " at " << Simulator::Now( ).GetSeconds( ) << " seconds." );
+    // NS_LOG_INFO( "Neighbor discovery completed for node " << nodeId << " at " << Simulator::Now( ).GetSeconds( ) << " seconds." );
 
     /* TODO: Find a better place for this
      * Currently, this needs to occur here because the positions vector isn't populated until this function is called in the simulation.
@@ -296,7 +335,7 @@ void AdhocNetwork::findNeighbors( uint32_t nodeId )
 //
 void AdhocNetwork::findNeighborsSubset( uint32_t nodeId )
 {
-    NS_LOG_INFO( "Starting subset neighbor selection for node " << nodeId << " at " << Simulator::Now( ).GetSeconds( ) << " seconds." );
+    // NS_LOG_INFO( "Starting subset neighbor selection for node " << nodeId << " at " << Simulator::Now( ).GetSeconds( ) << " seconds." );
     _neighborsSubset.at( nodeId ).clear( );
 
     Ptr<UniformRandomVariable> randomVar = CreateObject<UniformRandomVariable>( );
@@ -320,29 +359,8 @@ void AdhocNetwork::findNeighborsSubset( uint32_t nodeId )
     {
         _neighborsSubset.at( nodeId ).emplace_back( neighbors.at( index ) );
     }
-    NS_LOG_DEBUG( "Node " << nodeId << " selected " << subsetSize << " neighbors." );
-    NS_LOG_INFO( "Subset neighbor selection completed for node " << nodeId << " at " << Simulator::Now( ).GetSeconds( ) << " seconds." );
-}
-
-//
-// scheduleFindNeighbors: schedule periodic neighbor discovery.
-//
-void AdhocNetwork::scheduleFindNeighbors( double interval ) { Simulator::Schedule( Seconds( interval ), &AdhocNetwork::findNeighborsCallback, this, interval ); }
-
-//
-// findNeighborsCallback: a callback to update neighbors and schedule packet sending.
-//
-void AdhocNetwork::findNeighborsCallback( double interval )
-{
-    std::cout << "Finding neighbors" << std::endl;
-    findNeighbors( 0 );
-    std::cout << "Neighbors found" << std::endl;
-    for ( uint32_t i = 0; i < _nodes.GetN( ); ++i )
-    {
-        Ptr<Node> node                   = _nodes.Get( i );
-        std::vector<Ptr<Node>> neighbors = _neighbors.at( i );
-        Simulator::Schedule( Seconds( 1.0 ), &AdhocNetwork::sendPacketsHelper, this, node, i, neighbors );
-    }
+    // NS_LOG_DEBUG( "Node " << nodeId << " selected " << subsetSize << " neighbors." );
+    // NS_LOG_INFO( "Subset neighbor selection completed for node " << nodeId << " at " << Simulator::Now( ).GetSeconds( ) << " seconds." );
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -382,9 +400,10 @@ Ptr<Socket> AdhocNetwork::getSenderSocket( uint32_t senderId, uint32_t receiverI
 //
 void AdhocNetwork::sendPackets( Ptr<Node> senderNode, uint32_t senderId, std::vector<Ptr<Node>> neighbors )
 {
-
-    std::set<std::pair<uint32_t, uint32_t>> coverageSet = _intrinsicCoverageSets.at( senderId );
-    uint32_t dataSize                                   = 1024;
+    // Send the node's local view
+    std::set<CoverageQuad, CoverageQuadLess> coverageSet = _localView[senderId];
+    uint32_t coverageVersion                             = _coverageVersion[senderId];
+    uint32_t dataSize                                    = 1024;
     for ( Ptr<Node> receiverNode : neighbors )
     {
         uint32_t receiverId      = receiverNode->GetId( );
@@ -393,24 +412,24 @@ void AdhocNetwork::sendPackets( Ptr<Node> senderNode, uint32_t senderId, std::ve
         {
             continue;
         }
-        Simulator::Schedule( MilliSeconds( 1000 ), [this, senderSocket, senderId, receiverId, coverageSet, dataSize]( ) {
+        Simulator::Schedule( MilliSeconds( 1000 ), [this, senderSocket, senderId, receiverId, coverageVersion, coverageSet, dataSize]( ) {
             if ( !senderSocket )
             {
                 NS_LOG_ERROR( "senderSocket is null in scheduled lambda for Node " << senderId );
                 return;
             }
             Ptr<Packet> packet = Create<Packet>( );
-            GossipHeader gossipHeader( senderId, coverageSet, dataSize );
+            GossipHeader gossipHeader( senderId, coverageVersion, coverageSet, dataSize );
             packet->AddHeader( gossipHeader );
-            NS_LOG_INFO( "Packet size: " << packet->GetSize( ) );
-            _dataSizesScaled[senderId] = ( static_cast<double>( packet->GetSize( ) ) / _maximumDataSize ) * ( _assignedSensors[senderId].size( ) + 1 /* Initial area covered by the node */ );
+            // NS_LOG_INFO( "Packet size: " << packet->GetSerializedSize( ) );
+            _dataSizesScaled[senderId] = ( static_cast<double>( packet->GetSerializedSize( ) ) / _maximumDataSize ) * ( _assignedSensors[senderId].size( ) + 1 /* Initial area covered by the node */ );
             if ( senderSocket->Send( packet ) == -1 )
             {
                 NS_LOG_ERROR( "Failed to send packet from Node " << senderId << " to Node " << receiverId );
             }
             else
             {
-                NS_LOG_INFO( "Node " << senderId << " sent 1 packet to Node " << receiverId );
+                // NS_LOG_INFO( "Node " << senderId << " sent 1 packet to Node " << receiverId );
             }
         } );
     }
@@ -435,7 +454,7 @@ void AdhocNetwork::setupDataReceiver( Ptr<Node> node, uint32_t nodeId )
         return;
     }
     receiverSocket->SetRecvCallback( MakeCallback( &AdhocNetwork::receivePacket, this ) );
-    NS_LOG_INFO( "Data Receiver Socket bound on Node " << nodeId << " port " << receiverPort );
+    // NS_LOG_INFO( "Data Receiver Socket bound on Node " << nodeId << " port " << receiverPort );
 }
 
 //
@@ -457,6 +476,11 @@ uint32_t AdhocNetwork::getNodeIdFromIpAddress( Ipv4Address address )
 
 //
 // receivePacket: process incoming data packets.
+/*
+ * If one neighbor is providing useful information, that info will be added. Then check if there is duplicate, check for duplicate pairs and remove the one with a higher cost.
+ * Calculate utility is greater than 0. Add everything, merge to check cost of each pair. Check duplicate pairs, do not check utility of own node. The cost is the data.
+ *
+ */
 //
 void AdhocNetwork::receivePacket( Ptr<Socket> socket )
 {
@@ -479,19 +503,18 @@ void AdhocNetwork::receivePacket( Ptr<Socket> socket )
         GossipHeader gossipHeader;
         packet->RemoveHeader( gossipHeader );
 
-        // Check if the node has received all packets from its neighbors to reset Gossip propagation.
-        if ( _receivedPackets[receiverId].size( ) == calculateNumSubNeighbors( receiverId ) )
-        {
-            NS_LOG_INFO( "Node " << receiverId << " has received all packets, resetting received packets" );
-            _receivedPackets[receiverId].clear( );
-        }
+        int incomingVersion         = gossipHeader.GetCoverageVersion( );
+        int lastSeenForThisNeighbor = _lastSeenVersion[receiverId][senderId];
 
         // Avoid processing duplicate packets.
-        if ( _receivedPackets[receiverId].find( gossipHeader.GetOriginNodeId( ) ) == _receivedPackets[receiverId].end( ) )
+        if ( incomingVersion > lastSeenForThisNeighbor )
         {
-            _receivedPackets[receiverId].insert( gossipHeader.GetOriginNodeId( ) );
 
-            auto neighborCoverageSet = _intrinsicCoverageSets[senderId];
+            _lastSeenVersion[receiverId][senderId] = incomingVersion;
+            // Save old coverage for version-change detection
+            auto oldCoverage = _localView[receiverId];
+
+            auto coverageFromSender = gossipHeader.GetCoverageSet( );
 
             // Calculate Utility using the bitset–based method.
             double neighborUtility = calculateUtility( senderId, receiverId );
@@ -499,138 +522,31 @@ void AdhocNetwork::receivePacket( Ptr<Socket> socket )
 
             if ( neighborUtility > 0 )
             {
-                // // Update the aggregated bitset.
-                // _aggregatedSensorsBitset[receiverId] |= _sensorCoverageBitset[senderId];
-                // _aggregatedAreasBitset[receiverId] |= _areaCoverageBitset[senderId];
-
-                // // Record the neighbor's bitset for future recomputation.
-                // std::bitset<MAX_SENSOR_TYPES> neighborSensorBitset;
-                // neighborSensorBitset.reset( );
-                // for ( uint32_t sensor : _sensorCoverage[senderId] )
-                // {
-                //     neighborSensorBitset.set( sensor, true );
-                // }
-                // _neighborSensorBitset[receiverId][senderId] = neighborSensorBitset;
-
-                // std::bitset<MAX_AREA_TYPES> neighborAreaBitset;
-                // neighborAreaBitset.reset( );
-                // for ( uint32_t area : _areaCoverage[senderId] )
-                // {
-                //     neighborAreaBitset.set( area, true );
-                // }
-                // _neighborAreaBitset[receiverId][senderId] = neighborAreaBitset;
-
                 // Add (M_j, A_j) to local view
-                _localView[receiverId][senderId] = neighborCoverageSet;
+                for ( auto& p : coverageFromSender )
+                {
+                    _localView[receiverId].insert( p );
+                }
             }
             else
             {
-                // // If utility is not positive, remove this neighbor's contribution from the aggregated bitset.
-                // // Erase the neighbor's bitset entry and recompute the aggregated bitset.
-                // _neighborSensorBitset[receiverId].erase( senderId );
-                // _neighborAreaBitset[receiverId].erase( senderId );
-                // updateAggregatedSensors( receiverId );
-                // updateAggregatedAreas( receiverId );
+                checkDuplicates( receiverId, coverageFromSender );
+            }
 
-                // Remove from local view if it exists
-                _localView[receiverId].erase( senderId );
+            // 4) Check if local coverage changed
+            if ( _localView[receiverId] != oldCoverage )
+            {
+                // The node learned something new
+                // increment coverageVersion[receiverId]
+                _coverageVersion[receiverId]++;
+                NS_LOG_INFO( "Node " << receiverId << " learned new coverage => coverageVersion=" << _coverageVersion[receiverId] );
             }
 
             double ownUtility = calculateUtility( receiverId, receiverId );
             NS_LOG_INFO( "Receiver Utility of Node " << receiverId << ": " << ownUtility );
-            if ( ownUtility <= 0 )
+            if ( ownUtility < 0 )
             {
-                // _neighborSensorBitset[receiverId].erase( receiverId );
-                // _neighborAreaBitset[receiverId].erase( receiverId );
-                // updateAggregatedSensors( receiverId );
-                // updateAggregatedAreas( receiverId );
-
-                // remove (M_i, A_i) from local view if it exists
-                _localView[receiverId].erase( receiverId );
-            }
-
-            _coverageSteps[receiverId]++;
-
-            if ( !isCovered( receiverId ) || Simulator::IsFinished( ) )
-            {
-                NS_LOG_INFO( "Node " << receiverId << " does not cover, finding neighbors subset and sending packets" );
-                Simulator::Schedule( Simulator::Now( ) + Seconds( 1.0 ), &AdhocNetwork::findNeighborsSubset, this, receiverId );
-                Simulator::Schedule( Simulator::Now( ) + Seconds( 2.0 ), &AdhocNetwork::sendPackets, this, _nodes.Get( receiverId ), receiverId, _neighborsSubset[receiverId] );
-            }
-            else
-            {
-                NS_LOG_INFO( "Node " << receiverId << " covers" );
-                NS_LOG_INFO( "Coverage Steps: " << _coverageSteps[receiverId] );
-                _coveredSteps = _coverageSteps[receiverId];
-
-                // Now print the final coverage:
-                printFinalCoverage( receiverId );
-                _isCoverageReached = true;
-
-                //----------------------------------------------------
-                // Place in separate method
-                //----------------------------------------------------
-
-                // Build coverage string, mark _coveringNode, etc.
-                // Then compute the final coverage’s summed utility:
-                _coveredUtility = computeSummedUtility( receiverId );
-
-                // Possibly log the contributors:
-                auto finalNodes = getFinalContributors( receiverId );
-                NS_LOG_INFO( "Final coverage contributed by node IDs:" );
-                for ( auto c : finalNodes )
-                {
-                    NS_LOG_INFO( "  => Node " << c );
-                }
-                NS_LOG_INFO( "Summed intrinsic utility = " << _coveredUtility );
-
-                //----------------------------------------------------
-                // Place in separate method
-                //----------------------------------------------------
-
-                // Record which node converged:
-                _coveringNode = receiverId;
-
-                // TODO: Handle this better -- Create a function/private variable
-                // Create variable for the covering set
-
-                std::set<std::pair<uint32_t, uint32_t>> finalCoverage;
-
-                // // Loop over each sensor bit
-                // for ( size_t s = 0; s < MAX_SENSOR_TYPES; ++s )
-                // {
-                //     if ( _aggregatedSensorsBitset[receiverId].test( s ) )
-                //     {
-                //         // For every covered sensor, look at every covered area
-                //         for ( size_t a = 0; a < MAX_AREA_TYPES; ++a )
-                //         {
-                //             if ( _aggregatedAreasBitset[receiverId].test( a ) )
-                //             {
-                //                 // Insert the pair (sensorType, areaType)
-                //                 finalCoverage.insert( { static_cast<uint32_t>( s ), static_cast<uint32_t>( a ) } );
-                //             }
-                //         }
-                //     }
-                // }
-
-                // std::ostringstream oss;
-                // for ( auto& pair : finalCoverage )
-                // {
-                //     // "(sensor, area)"
-                //     oss << "(" << pair.first << "," << pair.second << ")";
-                // }
-                // _coveringSetString = oss.str( );
-
-                std::set<std::pair<uint32_t, uint32_t>> unionCoverage = buildUnionCoverage( receiverId );
-                // Convert unionCoverage to a string or store it in _coveringSetString
-                std::ostringstream oss;
-                for ( auto& p : unionCoverage )
-                {
-                    oss << "(" << p.first << "," << p.second << ")";
-                }
-                _coveringSetString = oss.str( );
-
-                Simulator::Stop( Seconds( Simulator::Now( ).GetSeconds( ) ) );
+                checkDuplicates( receiverId, _localView[receiverId] );
             }
         }
         else
@@ -654,241 +570,120 @@ std::pair<uint32_t, uint32_t> AdhocNetwork::setCoverage( uint32_t nodeId ) { ret
 //
 bool AdhocNetwork::isCovered( uint32_t receiverId )
 {
-    // // Check that the number of sensor types in the aggregated sensor bitset equals the total number of sensor types.
-    // bool sensorsCovered = ( _aggregatedSensorsBitset[receiverId].count( ) == _sensorTypes.size( ) );
-    // // Check that the number of area types in the aggregated area bitset equals the total number of area types.
-    // bool areasCovered = ( _aggregatedAreasBitset[receiverId].count( ) == _areas.size( ) );
-    // return sensorsCovered && areasCovered;
 
-    auto unionCoverage = buildUnionCoverage( receiverId );
-
-    // We want to see if unionCoverage covers all sensor types S_total and area types A_total.
-    // This means: for every sensor s in S_total and area a in A_total,
-    // we must have (s,a) in unionCoverage.
-
-    // If your S_total is [0..(someMaxSensor-1)] and A_total is likewise,
-    // check each pair. Or just do bitset approach. But let's do pairs:
-
+    auto& unionCoverage = _localView[receiverId];
     for ( uint32_t s : _sensorTypes )
     {
         for ( uint32_t a : _areas )
         {
-            std::pair<uint32_t, uint32_t> p = { s, a };
-            if ( unionCoverage.find( p ) == unionCoverage.end( ) )
+            bool found = false;
+            for ( auto& quad : unionCoverage )
             {
-                return false;
+                if ( quad.sensor == s && quad.area == a )
+                {
+                    found = true;
+                    break;
+                }
             }
+            if ( !found )
+                return false;
         }
     }
     return true;
 }
 
 //
-// getFinalContributors: Identify the contributors of the final covering set
-//
-std::vector<uint32_t> AdhocNetwork::getFinalContributors( uint32_t nodeId ) const
-{
-    std::vector<uint32_t> contributors;
-    // Each key in _localView[nodeId] is a node ID with positive utility coverage
-    for ( auto& entry : _localView[nodeId] )
-    {
-        contributors.push_back( entry.first );
-    }
-    return contributors;
-}
-
-//
 // calculateUtility: compute utility using bitset differences.
+// This calculation needs to take into account when a sensor and area are already in a set but not in a pair together
 //
 double AdhocNetwork::calculateUtility( uint32_t senderId, uint32_t receiverId )
 {
-    // std::bitset<MAX_SENSOR_TYPES> newSensorBits = _sensorCoverageBitset[senderId] & ~( _aggregatedSensorsBitset[receiverId] );
-    // int newSensors                              = newSensorBits.count( );
-    // NS_LOG_INFO( "New sensors: " << newSensors );
-    // std::bitset<MAX_AREA_TYPES> newAreaBits = _areaCoverageBitset[senderId] & ~( _aggregatedAreasBitset[receiverId] );
-    // int newAreas                            = newAreaBits.count( );
-    // NS_LOG_INFO( "New areas: " << newAreas );
+    // --------------------------------------------------------
+    // (A) Coverage sets for node i (the "sender") and set S_k (the "receiver")
+    // --------------------------------------------------------
+    // If you only want the intrinsic coverage of sender, use:
+    //   auto & senderCoverage = _intrinsicCoverageSets[senderId];
+    // If you want everything node i currently "knows", use:
+    //   auto & senderCoverage = _localView[senderId];
+    const auto& senderCoverage = _intrinsicCoverageSets[senderId];
+    const auto& skCoverage     = _localView[receiverId];
 
-    // return _alpha * newSensors + _beta * newAreas - _lambda * _dataSizesScaled[senderId];
+    // --------------------------------------------------------
+    // (B) Double-loop over sensors × areas
+    // --------------------------------------------------------
+    double incrementalCoverage = 0.0;
 
-    // 1) Retrieve the neighbor's coverage set:
-    //    (assuming it's "intrinsic coverage" for that neighbor)
-    //    e.g. std::set<std::pair<uint32_t, uint32_t>> neighborCoverageSet
-    //    If you stored coverage as sensor–area pairs, this is easy:
-    const auto& neighborCoverage = _intrinsicCoverageSets[senderId];
-
-    // 2) Build the union coverage from localView[receiverId].
-    //    This is a set of (sensor, area) pairs that the receiver's local view
-    //    currently includes.
-    std::set<std::pair<uint32_t, uint32_t>> unionCoverage = buildUnionCoverage( receiverId );
-
-    // 3) We want to see how many new sensor types and how many new area types
-    //    neighbor j would contribute. That means we need sets of sensors/areas
-    //    from unionCoverage.
-    std::unordered_set<uint32_t> existingSensors;
-    std::unordered_set<uint32_t> existingAreas;
-    for ( auto& pair : unionCoverage )
+    for ( auto s : _sensorTypes ) // s in S_total
     {
-        existingSensors.insert( pair.first );
-        existingAreas.insert( pair.second );
-    }
-
-    // 4) Similarly, from neighborCoverage (which is that neighbor's intrinsic coverage),
-    //    we can extract all sensors and areas as well.
-    //    Then compute how many are "new" compared to existingSensors/Areas.
-    std::unordered_set<uint32_t> neighborSensors;
-    std::unordered_set<uint32_t> neighborAreas;
-    for ( auto& p : neighborCoverage )
-    {
-        neighborSensors.insert( p.first );
-        neighborAreas.insert( p.second );
-    }
-
-    // count how many new sensors:
-    uint32_t newSensors = 0;
-    for ( auto s : neighborSensors )
-    {
-        if ( existingSensors.find( s ) == existingSensors.end( ) )
+        for ( auto a : _areas ) // a in A_total
         {
-            newSensors++;
-        }
-    }
-    // count how many new areas:
-    uint32_t newAreas = 0;
-    for ( auto a : neighborAreas )
-    {
-        if ( existingAreas.find( a ) == existingAreas.end( ) )
-        {
-            newAreas++;
+            // A_i(s,a) = 1 if 'senderCoverage' has (s,a)
+            double Ai_s_a = coversSensorArea( senderCoverage, s, a ) ? 1.0 : 0.0;
+
+            // max_{j in S_k} A_j(s,a) = 1 if 'skCoverage' has (s,a)
+            double Sk_s_a = coversSensorArea( skCoverage, s, a ) ? 1.0 : 0.0;
+
+            // incremental coverage for (s,a) from i w.r.t. S_k
+            // is Ai_s_a * [1 - Sk_s_a]
+            incrementalCoverage += Ai_s_a * ( 1.0 - Sk_s_a );
         }
     }
 
-    // 5) The data cost we subtract. Suppose we store the data cost in
-    //    _dataSizesScaled[senderId], meaning "the scaled cost of neighbor j's coverage."
-    double dataCost = _dataSizesScaled[senderId];
+    // --------------------------------------------------------
+    // (C) If you also have a cost term, subtract it
+    // --------------------------------------------------------
+    double dataCost   = _dataSizesScaled[senderId];
+    double totalValue = incrementalCoverage - _lambda * dataCost;
 
-    // 6) Finally, Utility(j) = alpha * newSensors + beta * newAreas - lambda * dataCost
-    double utility = _alpha * newSensors + _beta * newAreas - _lambda * dataCost;
+    return totalValue;
+}
 
-    return utility;
+bool AdhocNetwork::coversSensorArea( const std::set<CoverageQuad, CoverageQuadLess>& coverageSet, uint32_t sensor, uint32_t area )
+{
+    // We can do a quick 'find_if' for a quad that matches (sensor, area).
+    auto it = std::find_if( coverageSet.begin( ), coverageSet.end( ), [sensor, area]( const CoverageQuad& q ) { return q.sensor == sensor && q.area == area; } );
+    return ( it != coverageSet.end( ) );
 }
 
 double AdhocNetwork::computeIntrinsicUtilityOfNode( uint32_t nodeId ) const
 {
-    // Example: # of sensors, # of areas, minus data cost
-    // If each node has exactly 1 area, you do:
+    // If each node has exactly 1 area
     uint32_t numSensors = _assignedSensors[nodeId].size( );
-    uint32_t numAreas   = 1; // or however many you assigned
-    double dataCost     = _dataSizesScaled[nodeId];
+    uint32_t numAreas   = 1;
+    double dataCost     = _intrinsicUtility[nodeId];
 
     // Utility = alpha * (#sensors) + beta * (#areas) - lambda * dataCost
     return _alpha * numSensors + _beta * numAreas - _lambda * dataCost;
 }
 
-double AdhocNetwork::computeSummedUtility( uint32_t nodeId ) const
+double AdhocNetwork::computeSummedUtility( uint32_t nodeId )
 {
-    // 1) Grab the final contributors from localView
-    auto contributors = getFinalContributors( nodeId );
+    // Use an unordered_set to store unique contributor node IDs.
+    std::unordered_set<uint32_t> contributors;
 
-    // 2) Sum up each node’s intrinsic coverage utility
-    double total = 0.0;
-    for ( auto cid : contributors )
+    // Iterate over the final coverage set.
+    for ( const auto& quad : _localView[nodeId] )
     {
-        double util = computeIntrinsicUtilityOfNode( cid );
-        total += util;
+        contributors.insert( quad.originId );
     }
-    return total;
+
+    double totalUtility = 0.0;
+    // Sum up the intrinsic utility of each contributor.
+    for ( auto contributorId : contributors )
+    {
+        totalUtility += computeIntrinsicUtilityOfNode( contributorId );
+    }
+
+    return totalUtility;
 }
 
-std::set<std::pair<uint32_t, uint32_t>> AdhocNetwork::buildUnionCoverage( uint32_t nodeId ) const
+std::set<CoverageQuad, CoverageQuadLess> AdhocNetwork::buildUnionCoverage( uint32_t nodeId ) const
 {
-    std::set<std::pair<uint32_t, uint32_t>> unionSet;
-    for ( auto& entry : _localView[nodeId] ) // entry: (neighborId -> coverageSet)
-    {
-        const auto& coverage = entry.second;
-        unionSet.insert( coverage.begin( ), coverage.end( ) );
-    }
+    std::set<CoverageQuad, CoverageQuadLess> unionSet = _localView[nodeId];
     return unionSet;
 }
 
-// //
-// // updateAggregatedSensors: helper function to recalculate the aggregated sensor bitset for receiverId.
-// //
-// void AdhocNetwork::updateAggregatedSensors( uint32_t receiverId )
-// {
-//     std::bitset<MAX_SENSOR_TYPES> aggregated;
-//     aggregated = _sensorCoverageBitset[receiverId]; // Start with intrinsic coverage.
-//     for ( const auto& pair : _neighborSensorBitset[receiverId] )
-//     {
-//         aggregated |= pair.second;
-//     }
-//     _aggregatedSensorsBitset[receiverId] = aggregated;
-// }
-
-// //
-// // updateAggregatedAreas: helper function to recalculate the aggregated area bitset for receiverId.
-// //
-// void AdhocNetwork::updateAggregatedAreas( uint32_t receiverId )
-// {
-//     std::bitset<MAX_AREA_TYPES> aggregated;
-//     aggregated = _areaCoverageBitset[receiverId]; // Start with intrinsic coverage.
-//     for ( const auto& pair : _neighborAreaBitset[receiverId] )
-//     {
-//         aggregated |= pair.second;
-//     }
-//     _aggregatedAreasBitset[receiverId] = aggregated;
-// }
-
-uint32_t AdhocNetwork::calculateNumSubNeighbors( uint32_t nodeId )
-{
-    uint32_t numSubNeighbors = 0;
-    for ( uint32_t i = 0; i < _nodes.GetN( ); ++i )
-    {
-        for ( int j = 0; j < _neighborsSubset[i].size( ); ++j )
-        {
-            if ( _neighborsSubset[i][j]->GetId( ) == nodeId )
-                numSubNeighbors++;
-        }
-    }
-    return numSubNeighbors;
-}
-
-void AdhocNetwork::printFinalCoverage( uint32_t nodeId ) const
-{
-    // // Convert the aggregatedSensorsBitset[nodeId] to a list of sensor IDs:
-    // std::vector<uint32_t> coveredSensors;
-    // for ( size_t s = 0; s < MAX_SENSOR_TYPES; s++ )
-    // {
-    //     if ( _aggregatedSensorsBitset[nodeId].test( s ) )
-    //     {
-    //         coveredSensors.push_back( static_cast<uint32_t>( s ) );
-    //     }
-    // }
-
-    // // Convert the aggregatedAreasBitset[nodeId] to a list of area IDs:
-    // std::vector<uint32_t> coveredAreas;
-    // for ( size_t a = 0; a < MAX_AREA_TYPES; a++ )
-    // {
-    //     if ( _aggregatedAreasBitset[nodeId].test( a ) )
-    //     {
-    //         coveredAreas.push_back( static_cast<uint32_t>( a ) );
-    //     }
-    // }
-
-    // NS_LOG_INFO( "=== Final Coverage for Node " << nodeId << " ===" );
-    // NS_LOG_INFO( "Sensors covered: " );
-    // for ( auto s : coveredSensors )
-    // {
-    //     NS_LOG_INFO( "  Sensor ID: " << s );
-    // }
-    // NS_LOG_INFO( "Areas covered: " );
-    // for ( auto a : coveredAreas )
-    // {
-    //     NS_LOG_INFO( "  Area ID: " << a );
-    // }
-
-    NS_LOG_INFO( "Final coverage set: " + _coveringSetString );
-}
+void AdhocNetwork::printFinalCoverage( uint32_t nodeId ) const { NS_LOG_INFO( "Final coverage set: " + _coveringSetString ); }
 
 bool AdhocNetwork::isCoverageReached( ) { return _isCoverageReached; }
 
@@ -907,28 +702,59 @@ void AdhocNetwork::printNodeInfoToFile( const std::string& filename ) const
         outFile << "----------------------------------------\n";
         outFile << "Node ID: " << i << "\n";
 
-        // Print node position
-        if ( i < _positions.size( ) )
+        // Print node coverage as pairs
+        outFile << "Coverage Pairs: ";
+        for ( const auto& sensor : _assignedSensors[i] )
         {
-            outFile << "Position: (" << _positions[i].x << ", " << _positions[i].y << ")\n";
-        }
-
-        // Print intrinsic coverage set (sensor–area pairs)
-        outFile << "Intrinsic Coverage Set: ";
-        for ( auto pair : _intrinsicCoverageSets[i] )
-        {
-            outFile << "(" << pair.first << ", " << pair.second << ") ";
+            outFile << "(" << sensor << "," << _assignedAreas[i] << ") ";
         }
         outFile << "\n";
 
-        // Print neighbor information
-        outFile << "Discovered Neighbors: ";
-        for ( auto neighbor : _neighbors[i] )
-        {
-            outFile << neighbor->GetId( ) << " ";
-        }
-        outFile << "\n";
+        // Print data size scaled
+        // TODO: this will end up being the final dataSizesScaled, we want initial
+        outFile << "Data Size Scaled: " << _intrinsicUtility[i] << "\n";
     }
     outFile << "========== End of Node Information ==========\n";
     outFile.close( );
+}
+
+void AdhocNetwork::checkDuplicates( const uint32_t& receiverId, const std::set<CoverageQuad, CoverageQuadLess>& senderCoverage )
+{
+    // For each pair in the sender's coverage set:
+    for ( const auto& incomingQuad : senderCoverage )
+    {
+        // Look for a pair in the receiver's local view that has the same sensor and area.
+        auto it = std::find_if( _localView[receiverId].begin( ), _localView[receiverId].end( ), [&incomingQuad]( const CoverageQuad& existingQuad ) {
+            return existingQuad.sensor == incomingQuad.sensor && existingQuad.area == incomingQuad.area;
+        } );
+        if ( it != _localView[receiverId].end( ) )
+        {
+            // There is a duplicate. Remove the one with the higher cost.
+            if ( it->dataScaled > incomingQuad.dataScaled )
+            {
+                _localView[receiverId].erase( it );
+                if ( _localView[receiverId] != senderCoverage )
+                {
+                    _localView[receiverId].insert( incomingQuad );
+                }
+            }
+
+            // Otherwise, keep the existing one (the one with lower cost).
+
+            // Deliverable 1:
+            //      every node's initial information: sensor, area, data size, node i
+            //      utility score of final solution for every sim run: Based on the contributing nodes' local coverage; the summed utility of each contributing node's iniitial utility
+            // Deliverable 2:
+            //      For each sim run, information (s, a, d) for the selected nodes.
+            //      Between each round, every node move to a random adjacent cell
+            //      Run for 100-150 sim runs
+        }
+        else
+        {
+            if ( _localView[receiverId] != senderCoverage )
+            {
+                _localView[receiverId].insert( incomingQuad );
+            }
+        }
+    }
 }
